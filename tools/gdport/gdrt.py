@@ -171,7 +171,7 @@ def _str_method(s, name, a):
         return bytearray.fromhex(s)
     if name == "is_empty":
         return s == ""
-    raise AttributeError("String.%s" % name)
+    return _str_method_ui(s, name, a)
 
 
 def _pba_method(b, name, a):
@@ -254,7 +254,7 @@ def _list_method(lst, name, a):
         return None
     if name == "has":
         return a[0] in lst
-    raise AttributeError("Array.%s" % name)
+    return _list_method_ui(lst, name, a)
 
 
 def _dict_method(d, name, a):
@@ -275,6 +275,14 @@ def _dict_method(d, name, a):
         return len(d) == 0
     if name == "keys":
         return list(d.keys())
+    if name == "values":
+        return list(d.values())
+    if name == "duplicate":
+        import copy
+        return copy.deepcopy(d) if a and a[0] else dict(d)
+    if name == "clear":
+        d.clear()
+        return None
     raise AttributeError("Dictionary.%s" % name)
 
 
@@ -473,3 +481,220 @@ class OS:
     def delay_msec(n):
         import time
         time.sleep(n / 1e3)
+
+
+# ---------------------------------------------------- Modern-UI additions
+# (String/Array methods and global functions used by godot/ui/*.gd; see
+# gd2py.py --ui.  Semantics follow the Godot 4 documentation.)
+import math as _math
+
+PI = _math.pi
+TAU = _math.tau
+INF = float("inf")
+
+
+def _str_method_ui(s, name, a):
+    if name == "contains":
+        return a[0] in s
+    if name == "count":
+        return s.count(a[0])
+    if name == "lstrip":
+        return s.lstrip(a[0])
+    if name == "rstrip":
+        return s.rstrip(a[0])
+    if name == "pad_zeros":
+        neg = s.startswith("-")
+        body = s[1:] if neg else s
+        ip, dot, fp = body.partition(".")
+        return ("-" if neg else "") + ip.rjust(a[0], "0") + dot + fp
+    if name == "to_int":
+        import re
+        m = re.match(r"\s*[-+]?\d+", s)
+        return int(m.group()) if m else 0
+    if name == "to_float":
+        try:
+            return float(s)
+        except ValueError:
+            return 0.0
+    if name == "is_valid_int":
+        import re
+        return re.fullmatch(r"[-+]?\d+", s) is not None
+    if name == "left":
+        n = a[0]
+        return s[:n] if n >= 0 else s[:len(s) + n]
+    if name == "right":
+        n = a[0]
+        return s[len(s) - n:] if n >= 0 else s[-n:]
+    if name == "xml_escape":
+        out = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        if a and a[0]:
+            out = out.replace('"', "&quot;").replace("'", "&apos;")
+        return out
+    if name == "capitalize":
+        return " ".join(w[:1].upper() + w[1:].lower() for w in s.replace("_", " ").split())
+    if name == "trim_prefix":
+        return s[len(a[0]):] if s.startswith(a[0]) else s
+    if name == "trim_suffix":
+        return s[:-len(a[0])] if a[0] and s.endswith(a[0]) else s
+    if name == "rfind":
+        return s.rfind(a[0])
+    if name == "get_slice":
+        parts = s.split(a[0])
+        return parts[a[1]] if a[1] < len(parts) else ""
+    raise AttributeError("String.%s" % name)
+
+
+def _list_method_ui(lst, name, a):
+    if name == "push_back":
+        lst.append(a[0])
+        return None
+    if name == "back":
+        return lst[-1] if lst else None
+    if name == "front":
+        return lst[0] if lst else None
+    if name == "insert":
+        lst.insert(a[0], a[1])
+        return OK
+    if name == "clear":
+        del lst[:]
+        return None
+    if name == "count":
+        return lst.count(a[0])
+    if name == "find":
+        try:
+            return lst.index(a[0], *(a[1:]))
+        except ValueError:
+            return -1
+    if name == "reverse":
+        lst.reverse()
+        return None
+    if name == "sort":
+        lst.sort()
+        return None
+    if name == "max":
+        return max(lst) if lst else None
+    if name == "min":
+        return min(lst) if lst else None
+    raise AttributeError("Array.%s" % name)
+
+
+def floorf(v):
+    return float(_math.floor(v))
+
+
+def ceilf(v):
+    return float(_math.ceil(v))
+
+
+def roundf(v):
+    # Godot rounds half away from zero
+    return float(_math.floor(abs(v) + 0.5)) * (1 if v >= 0 else -1)
+
+
+def roundi(v):
+    return int(roundf(v))
+
+
+def floori(v):
+    return int(_math.floor(v))
+
+
+def absf(v):
+    return abs(float(v))
+
+
+def minf(a, b):
+    return float(min(a, b))
+
+
+def maxf(a, b):
+    return float(max(a, b))
+
+
+def clampf(v, lo, hi):
+    return float(max(lo, min(hi, v)))
+
+
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def lerpf(a, b, t):
+    return a + (b - a) * t
+
+
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+
+def sqrt(v):
+    return _math.sqrt(v)
+
+
+def sin(v):
+    return _math.sin(v)
+
+
+def cos(v):
+    return _math.cos(v)
+
+
+def atan2(y, x):
+    return _math.atan2(y, x)
+
+
+def deg_to_rad(v):
+    return _math.radians(v)
+
+
+def rad_to_deg(v):
+    return _math.degrees(v)
+
+
+def posmod(a, b):
+    return a % b
+
+
+def fposmod(a, b):
+    return _math.fmod(_math.fmod(a, b) + b, b)
+
+
+def signf(v):
+    return 1.0 if v > 0 else (-1.0 if v < 0 else 0.0)
+
+
+def signi(v):
+    return 1 if v > 0 else (-1 if v < 0 else 0)
+
+
+def is_equal_approx(a, b):
+    return abs(a - b) <= 1e-5 * max(1.0, abs(a), abs(b))
+
+
+def float_(v):
+    return float(v)
+
+
+class JSON:
+    @staticmethod
+    def parse_string(text):
+        import json
+        try:
+            return json.loads(text)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def stringify(v, indent="", sort_keys=True):
+        import json
+        return json.dumps(v, indent=indent or None, sort_keys=sort_keys)
+
+
+def _file_as_string(path):
+    try:
+        return open(globalize(path), "rb").read().decode("utf-8")
+    except OSError:
+        return ""
+
+
+FileAccess.get_file_as_string = staticmethod(_file_as_string)

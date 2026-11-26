@@ -10,9 +10,16 @@ else/while/for, match (-> Python match/case), member access without `self`,
 `X.new()`, builtin String/Array/Dictionary/Packed*Array methods (-> gdcall),
 `"fmt" % [..]`, integer `/`, lambdas `func(a, b): return e`, and `as T` casts.
 
-Usage: python3 tools/gdport/gd2py.py out.py godot/host/machine.gd godot/recomp/u_r_0.gd ...
+Usage: python3 tools/gdport/gd2py.py [--ui] out.py godot/host/machine.gd godot/recomp/u_r_0.gd ...
 A file without class_name becomes a class named after the file; `extends X` of a
 translated class X becomes Python inheritance.
+
+--ui is for the Modern-UI layout code (godot/ui/*.gd): `/` becomes Python's true
+division (the UI code divides floats; it writes int(a / b) where it wants an
+int, which truncates the same way in both languages), and more builtin
+String/Array/Dictionary methods are dispatched through gdcall.  Without --ui
+the output is unchanged (the recompiled program and the host layer rely on
+integer `/`).
 """
 import re
 import sys
@@ -23,6 +30,11 @@ BUILTIN_METHODS = {
     "join", "hex_decode", "is_empty", "size", "resize", "fill", "append", "append_array",
     "slice", "decode_u16", "decode_u32", "remove_at", "duplicate", "get_string_from_ascii", "hex_encode",
     "pop_back", "sort_custom", "has", "get", "erase", "merge", "keys", "call"}
+UI_METHODS = {
+    "push_back", "back", "front", "insert", "clear", "count", "contains", "lstrip", "rstrip",
+    "pad_zeros", "to_int", "is_valid_int", "left", "right", "xml_escape", "reverse", "values",
+    "sort", "to_float", "capitalize", "trim_prefix", "trim_suffix", "pad_decimals", "rfind",
+    "unicode_at", "get_slice", "md5_text", "count_n", "erase_text", "max", "min", "sha1_text"}
 RENAMES = {"true": "True", "false": "False", "null": "None", "int": "gdint", "str": "gd_str"}
 TOKEN_RE = re.compile(r'''
     (?P<str>"(?:\\.|[^"\\])*")
@@ -79,11 +91,16 @@ def logical_lines(text):
         line = strip_comment(raw)
         if not line.strip():
             continue
+        cont = line.endswith("\\")
+        if cont:
+            line = line[:-1].rstrip()
         if buf is None:
             indent = len(line) - len(line.lstrip("\t"))
             buf = line.strip()
         else:
             buf += " " + line.strip()
+        if cont:
+            continue
         depth = 0
         for t in tokenize(buf):
             if t in "([{":
@@ -192,6 +209,8 @@ def split_top(s, sep=","):
 
 
 class Translator:
+    ui = False
+
     def __init__(self, cls, all_classes):
         self.cls = cls
         self.members = cls.members()
@@ -227,7 +246,8 @@ class Translator:
             if t == "." and nxt == "new" and i + 2 < len(toks) and toks[i + 2] == "(":
                 i += 2
                 continue
-            if t == "." and nxt in BUILTIN_METHODS and i + 2 < len(toks) and toks[i + 2] == "(":
+            if t == "." and (nxt in BUILTIN_METHODS or (self.ui and nxt in UI_METHODS)) \
+                    and i + 2 < len(toks) and toks[i + 2] == "(":
                 start = self.primary_start(out)
                 obj = out[start:]
                 del out[start:]
@@ -250,6 +270,10 @@ class Translator:
                 inner = self.expr(" ".join(toks[i + 1:j + 1]), local, static)
                 out += ["%", "tuple", "(", inner, ")"]
                 i = j + 1
+                continue
+            if t == "/" and self.ui:
+                out.append("/")
+                i += 1
                 continue
             if t == "/":
                 floaty = (nxt and re.fullmatch(r"\d+\.\d*(e[+-]?\d+)?|\d+e[+-]?\d+", nxt)) or (
@@ -424,8 +448,12 @@ def translate(classes_by_file):
 
 
 def main():
-    dst = sys.argv[1]
-    parsed = [parse_file(p) for p in sys.argv[2:]]
+    args = sys.argv[1:]
+    if args and args[0] == "--ui":
+        Translator.ui = True
+        args = args[1:]
+    dst = args[0]
+    parsed = [parse_file(p) for p in args[1:]]
     open(dst, "w").write(translate(parsed))
 
 

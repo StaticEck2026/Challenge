@@ -6,8 +6,11 @@ own copy**. The translator `tools/recomp/recompile.py` turns every 8086
 function of the program into a GDScript function in `recomp/`. The scripts in
 `host/` provide what the program expects from the PC: DOS file services on
 `FileAccess`, the BIOS keyboard and video services, the PLINK86 overlay
-manager, the clock and the PC speaker. `main.gd` and `text_screen.gd` draw the
-screen and take your keys. There is no 8086 interpreter, and no game code or
+manager, the clock and the PC speaker. `main.gd` takes your keys and draws the
+screen in one of three views: **Modern** (default, `ui/`: every screen redrawn
+with flat SVG vector art from the program's memory, presentation only),
+**HD** (`text_screen.gd`: the text screens with a vector font) or **Classic**
+(the original bitmap). There is no 8086 interpreter, and no game code or
 game data, in this project. **Bring your own copy of the game.**
 `docs/RECOMPILATION.md` explains the design.
 
@@ -126,7 +129,8 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 | `--turbo` | start in turbo speed |
 | `--mute` | no PC-speaker sound |
 | `--fullscreen` | start in fullscreen |
-| `--retro` | start with the original 8x16 bitmap text instead of HD text |
+| `--view=modern\|hd\|classic` | start in the Modern view (default), HD text, or the original bitmap |
+| `--retro` | same as `--view=classic` |
 | `--modern-colors` | start with the modern palette |
 
 ## Keys
@@ -148,13 +152,38 @@ paused).
 |--------------|--------|
 | **F12** / *Speed* | cycle 1x, 2x, 4x, 8x, turbo (32x). The 18.2 Hz PC clock follows real time times the factor. The game paces itself only by that clock, so everything gets faster |
 | **F11** / *Fullscreen* | toggle fullscreen (F11 is not passed to the game: it has no use for it) |
-| *Text: HD / retro* | HD vector-font text (default) or the original 8x16 bitmap text, 4:3 |
+| *View: Modern / HD / Classic* | the Modern vector view (default), HD vector-font text, or the original bitmap (8x16 text and CGA), 4:3 |
 | *Colors: classic / modern* | the 16 CGA colours, or a softer modern palette with the same hues (HD text only) |
 | *Pause* | pause / resume the program (its thread waits) |
 | *Reset* | reboot the program |
 | *Game folder...* | pick the folder with the game's data files |
-| *Screenshot* | save what is on screen to `user://screenshot_<time>.png` |
+| **Print Screen** / *Screenshot* | save what is on screen to `user://screenshot_<time>.png` |
 | *Sound* | toggle the PC speaker |
+
+## Display: the Modern view
+
+The default view redraws every screen with hand-authored flat SVG art
+(`ui/art/`), rasterised with `Image.load_svg_from_string()` at the window's
+size (sharp at any resolution):
+
+* the field top-down and horizontal, whole, filling 16:9: striped grass,
+  yard lines and numbers, hash marks, goal posts, end zones in team colours;
+* players as team-coloured discs with their jersey numbers (from the game's
+  rosters), moving smoothly between the game's position updates; the ball,
+  the line of scrimmage (blue) and the first-down line (yellow), for plays,
+  instant replay and the field overview before the snap;
+* a scoreboard pill (team codes, score, quarter, clock, time-outs,
+  possession, down and distance), a slim toolbar (View, Speed, Pause, Sound,
+  Screenshot, Zoom, More, Fullscreen) and an info strip with the play text;
+* setup, team selection, match-up, play calling, statistics and prompts as
+  cards and buttons. A button sends the key the screen asks for. Screens it
+  does not recognise show the original text (HD renderer) in a modern frame.
+
+It reads the program's memory only (addresses in `ui/state_map.json`) and
+never writes it. The *More* button shows the toolbar with Reset, Game folder
+and Colors. The art files have `importer="keep"` import settings, so Godot
+exports them as plain files. Design, address map and its evidence:
+`docs/MODERN_UI.md`.
 
 ## Display: HD text at 1080p
 
@@ -184,6 +213,9 @@ drawn with Pillow) and renders real game screens at 1920x1080 without Godot:
 ## How it works
 
 ```
+ui/                the Modern view: game_state.gd (reads memory, state_map.json), screens.gd
+                   (classifier + layouts), match_view.gd (field), draw_list.gd, art.gd, ui_theme.gd,
+                   modern_view.gd (Godot drawing and input), art/*.svg
 recomp/            GENERATED from your NFL.EXE by tools/recomp/recompile.py (gitignored):
                    u_r_N.gd root code, u_oNN_M.gd overlay N, recomp_index.gd dispatch table,
                    program.bin baked program image, game/ data files (--bundle-data)

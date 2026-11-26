@@ -1,0 +1,237 @@
+#!/usr/bin/env python3
+"""Check that the Modern view puts every player where the game draws him.
+
+Runs the recompiled program headless (harness.py) through games with plays
+and instant replays, and at every tick in CGA mode 4 runs the shipped
+GameState (godot/ui/game_state.gd translated by gd2py) on the same memory.
+For each frame it checks, independently of the play records the state is
+read from:
+
+1. players: each of the 22 positions the Modern view draws (field yards) is
+   mapped back to CGA pixels and must match an O (offence) or X (defence)
+   sprite that the game drew in video memory there (sprite recognised in the
+   2-bit CGA frame with the game's own sprite shapes from data file A),
+   within --tol pixels;
+2. yard lines: the yard positions of the view (fx) must put a multiple of
+   5 yards (within 0.2 yd) on every yard line the game drew (horizontal
+   lines in the CGA frame, up to 3 pixels thick; wider bands are the filled
+   area behind an end line), so the yard scale and the scroll are right;
+3. ball spot: at the first frame of each play the ball must be within one
+   yard of the line of scrimmage the text-mode scoreboard showed before the
+   play ("Yard: 33", on the side of the field the overview's marker is on),
+   an absolute anchor from a different screen.
+
+  python3 -I tools/modern/check_positions.py --game-dir /path/to/nfl [--ticks 6000]
+"""
+import argparse
+import os
+import sys
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import harness  # noqa: E402
+import scripts  # noqa: E402
+import uimod  # noqa: E402
+
+
+def load_sprites(game_dir):
+    name = next(n for n in os.listdir(game_dir) if n.upper() == "A")
+    data = open(os.path.join(game_dir, name), "rb").read()
+    out = []
+    off = 0
+    for _ in range(3):
+        w, h = data[off], data[off + 1]
+        img = np.zeros((h, w * 4), dtype=np.int8)
+        for y in range(h):
+            for xb in range(w):
+                b = data[off + 2 + y * w + xb]
+                for i, sh in enumerate((6, 4, 2, 0)):
+                    img[y, xb * 4 + i] = (b >> sh) & 3
+        out.append(img[:, :9])
+        off += 2 + w * h
+    return out          # 0: O (colour 1), 1: X (colour 2), 2: ball
+
+
+def cga_pixels(mem):
+    a = np.frombuffer(bytes(mem[0xB8000:0xBC000]), dtype=np.uint8)
+    px = np.zeros((200, 320), dtype=np.int8)
+    for y in range(200):
+        o = (y & 1) * 0x2000 + (y >> 1) * 80
+        row = a[o:o + 80]
+        px[y, 0::4] = row >> 6
+        px[y, 1::4] = (row >> 4) & 3
+        px[y, 2::4] = (row >> 2) & 3
+        px[y, 3::4] = row & 3
+    return px
+
+
+def sprite_score(px, spr, x, y):
+    """How well sprite `spr` (9x9) explains the frame at top-left (x, y).
+    Sprites are XOR-drawn: over a field line colour c shows as c ^ 3."""
+    c = int(spr[spr > 0].max())
+    h, w = spr.shape
+    ys, xs = np.nonzero(spr)
+    ok = n = 0
+    for yy, xx in zip(ys, xs):
+        X, Y = x + xx, y + yy
+        if 0 <= X < 320 and 0 <= Y < 200:
+            n += 1
+            v = px[Y, X]
+            ok += v == c or v == (c ^ 3)
+    if n < len(ys) * 0.6:
+        return -1.0
+    bad = 0
+    bg = 0
+    for yy in range(h):
+        for xx in range(w):
+            if spr[yy, xx] == 0:
+                X, Y = x + xx, y + yy
+                if 0 <= X < 320 and 0 <= Y < 200:
+                    bg += 1
+                    bad += px[Y, X] == c
+    return ok / n - (bad / bg if bg else 0.0)
+
+
+def field_lines(px):
+    return [y for y in range(200) if int((px[y] == 3).sum()) > 200]
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--game-dir", default=os.environ.get("NFL_GAME_DIR", ""))
+    ap.add_argument("--ticks", type=int, default=7000)
+    ap.add_argument("--tol", type=int, default=2)
+    ap.add_argument("--fast", action="store_true", help="also run a game at extra-extra-fast speed")
+    a = ap.parse_args()
+    ui = uimod.load()
+    sprites = load_sprites(a.game_dir)
+    runs = [("instant replay, normal speed", "/i",
+             scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Timeouts}" + "{wait:2000}" * 8)]
+    if a.fast:
+        runs.append(("instant replay, Alt-E", "/i",
+                     scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Timeouts}{wait:20}{Alt-E}"))
+    total = {"frames": 0, "players": 0, "matched": 0, "offscreen": 0, "max_err": 0.0,
+             "iso": 0, "iso_matched": 0, "iso_exact": 0, "spots": [], "line_detail": [],
+             "line_frames": 0, "line_bad": 0, "plays": 0, "spot_bad": 0, "missed": []}
+    for title, args, keys in runs:
+        r = harness.Run(a.game_dir, "check", args, keys, max_ticks=a.ticks, log=lambda m: None)
+        gs = ui.GameState()
+        st = {"was_gfx": False, "marker_fx": None}
+
+        def tick(r):
+            mem = r.mem
+            gs.update(mem)
+            if mem[0x449] != 4:
+                if gs.field_up and gs.yard_text.isdigit():
+                    # the line of scrimmage as the scoreboard text shows it
+                    # ("Yard: 33"); the side of the field is the one whose
+                    # column carries one of the game's scrimmage / first-down
+                    # marks (the half blocks drawn above the field overview)
+                    y = int(gs.yard_text)
+                    marks = [c for row in gs.rows[3:6] for c, ch in enumerate(row) if ch == "\u2590"]
+                    side = [v for v in (y, 100 - y) if any(abs(14 + v / 2.0 - c) <= 1.0 for c in marks)]
+                    st["marker_fx"] = side[0] if len(side) == 1 else None
+                st["was_gfx"] = False
+                return
+            first = not st["was_gfx"]
+            st["was_gfx"] = True
+            if not gs.play_active:
+                return
+            px = cga_pixels(mem)
+            total["frames"] += 1
+            off_team = gs.players[0]["team"]
+            los_y = gs.los_y_plus if gs.dir_of(off_team) > 0 else gs.los_y_minus
+            los = gs.play_los
+            # 1. players
+            exp = []
+            for p in gs.players:
+                ex, ey = gs.field_to_screen(p["fx"], p["fy"], los, los_y)
+                exp.append((int(round(ex)), int(round(ey))))
+            bx, by = gs.field_to_screen(gs.ball["fx"], gs.ball["fy"], los, los_y)
+            for i, p in enumerate(gs.players):
+                ex, ey = exp[i]
+                # isolated: no other sprite (or the ball) overlapping its 9x9 box
+                iso = all(j == i or abs(ex - qx) >= 10 or abs(ey - qy) >= 10
+                          for j, (qx, qy) in enumerate(exp)) and (abs(ex - bx) >= 10 or abs(ey - by) >= 10)
+                if not (0 <= ex <= 311 and 0 <= ey <= 191):
+                    total["offscreen"] += 1
+                    continue
+                total["players"] += 1
+                spr = sprites[0] if p["off"] else sprites[1]
+                best = (sprite_score(px, spr, ex, ey), 0, 0)
+                if best[0] < 0.75:          # not at the exact pixel: search the tolerance window
+                    for dy in range(-a.tol, a.tol + 1):
+                        for dx in range(-a.tol, a.tol + 1):
+                            s = sprite_score(px, spr, ex + dx, ey + dy)
+                            if s > best[0]:
+                                best = (s, dx, dy)
+                if iso:
+                    total["iso"] += 1
+                if best[0] >= 0.75:
+                    total["matched"] += 1
+                    total["max_err"] = max(total["max_err"], float(np.hypot(best[1], best[2])))
+                    if iso:
+                        total["iso_matched"] += 1
+                        total["iso_exact"] += best[1] == 0 and best[2] == 0
+                elif iso and len(total["missed"]) < 12:
+                    total["missed"].append((r.gm.ticks, i, ex, ey, round(best[0], 2)))
+            # 2. yard lines: drawn rows must sit on multiples of 5 yards
+            lines = field_lines(px)
+            if lines:
+                total["line_frames"] += 1
+                # group rows into drawn lines (the end lines are several
+                # pixels thick); each line must cover a 5-yard multiple
+                runs = []
+                for ly in lines:
+                    if runs and ly == runs[-1][-1] + 1:
+                        runs[-1].append(ly)
+                    else:
+                        runs.append([ly])
+                for run in runs:
+                    if len(run) > 3:
+                        continue        # a filled area (out of bounds behind an end line), not a line
+                    fxs = [los + (los_y - (ly + gs.cam_y)) / gs.px_per_yard for ly in run]
+                    if min(abs(fx / 5.0 - round(fx / 5.0)) * 5.0 for fx in fxs) > 0.2:
+                        total["line_bad"] += 1
+                        if len(total["line_detail"]) < 15:
+                            total["line_detail"].append((r.gm.ticks, run, gs.cam_y, los, los_y,
+                                                         [round(f, 2) for f in fxs], gs.play_step))
+                        break
+            # 3. ball spot at the snap vs the text overview's marker
+            if first and st["marker_fx"] is not None and gs.ball.get("fx") is not None:
+                total["plays"] += 1
+                total["spots"].append((r.gm.ticks, round(gs.ball["fx"], 2), st["marker_fx"], los))
+                if abs(gs.ball["fx"] - st["marker_fx"]) > 1.0:
+                    total["spot_bad"] += 1
+        r.on_tick = tick
+        r.run()
+        print("[check] %s: %d ticks run" % (title, r.gm.ticks), flush=True)
+    t = total
+    pct = 100.0 * t["matched"] / max(t["players"], 1)
+    print("[check] %d graphics frames, %d on-screen player positions, %d matched a drawn sprite "
+          "(%.2f%%), max offset %.1f px (tolerance %d); %d positions scrolled off screen"
+          % (t["frames"], t["players"], t["matched"], pct, t["max_err"], a.tol, t["offscreen"]))
+    ipct = 100.0 * t["iso_matched"] / max(t["iso"], 1)
+    print("[check] isolated players (no other sprite overlapping, so the XOR-drawn shape is intact): "
+          "%d, matched %d (%.2f%%), %d of them at exactly the same pixel"
+          % (t["iso"], t["iso_matched"], ipct, t["iso_exact"]))
+    print("[check] (overlapping sprites destroy each other's shapes in the XOR-drawn CGA frame, "
+          "so only isolated players are a fair test)")
+    print("[check] yard lines: %d frames with lines, %d frames where a drawn line was not on a "
+          "5-yard multiple of the view's scale" % (t["line_frames"], t["line_bad"]))
+    print("[check] ball at the snap vs the line of scrimmage on the text scoreboard: %d plays, "
+          "%d off by more than 1 yard" % (t["plays"], t["spot_bad"]))
+    print("[check] snaps (tick, ball fx, scoreboard fx, los var): %s" % t["spots"][:12])
+    if t["line_detail"]:
+        print("[check] yard-line mismatches (tick, rows, cam_y, los, los_y, fx, step): %s" % t["line_detail"])
+    if t["missed"]:
+        print("[check] unmatched isolated (tick, record, x, y, best score): %s" % t["missed"])
+    ok = t["frames"] > 0 and ipct >= 99.0 and t["line_bad"] == 0 and t["spot_bad"] == 0
+    print("[check] %s" % ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

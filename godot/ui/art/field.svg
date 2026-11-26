@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="593.33" viewBox="0 0 1260 593.33">
+  <!-- Modern view: American football field, top-down, horizontal.
+       10 units = 1 yard. The playing field (end line to end line, 120 x 53.33 yd)
+       starts at (30, 30); goal lines at x = 130 and 1130; yard lines every 5 yd.
+       Inbound hash marks sit where NFL Challenge's own field puts them
+       (21.6 and 31.75 yd from the top sideline). Yard numbers and end-zone
+       names are drawn by the view (match_view.gd) in the same style.
+       Placeholders: {{left}} {{right}} end-zone colours. Original art. -->
+  <rect x="0" y="0" width="1260" height="593.33" fill="#235f2e"/>
+  <!-- mown stripes, 5 yards each, goal line to goal line -->
+  <rect x="130" y="30" width="1000" height="533.33" fill="#2f7d3c"/>
+  <g fill="#2a7236">
+    <rect x="180" y="30" width="50" height="533.33"/>
+    <rect x="280" y="30" width="50" height="533.33"/>
+    <rect x="380" y="30" width="50" height="533.33"/>
+    <rect x="480" y="30" width="50" height="533.33"/>
+    <rect x="580" y="30" width="50" height="533.33"/>
+    <rect x="680" y="30" width="50" height="533.33"/>
+    <rect x="780" y="30" width="50" height="533.33"/>
+    <rect x="880" y="30" width="50" height="533.33"/>
+    <rect x="980" y="30" width="50" height="533.33"/>
+    <rect x="1080" y="30" width="50" height="533.33"/>
+  </g>
+  <!-- end zones in team colours -->
+  <rect x="30" y="30" width="100" height="533.33" fill="{{left}}"/>
+  <rect x="1130" y="30" width="100" height="533.33" fill="{{right}}"/>
+  <g fill="#000000" opacity="0.10">
+    <rect x="30" y="30" width="100" height="533.33"/>
+    <rect x="1130" y="30" width="100" height="533.33"/>
+  </g>
+  <!-- yard lines every 5 yards -->
+  <g fill="#f4f7f1" opacity="0.92">
+    <rect x="179.2" y="30" width="1.6" height="533.33"/>
+    <rect x="229.2" y="30" width="1.6" height="533.33"/>
+    <rect x="279.2" y="30" width="1.6" height="533.33"/>
+    <rect x="329.2" y="30" width="1.6" height="533.33"/>
+    <rect x="379.2" y="30" width="1.6" height="533.33"/>
+    <rect x="429.2" y="30" width="1.6" height="533.33"/>
+    <rect x="479.2" y="30" width="1.6" height="533.33"/>
+    <rect x="529.2" y="30" width="1.6" height="533.33"/>
+    <rect x="579.2" y="30" width="1.6" height="533.33"/>
+    <rect x="628.8" y="30" width="2.4" height="533.33"/>
+    <rect x="679.2" y="30" width="1.6" height="533.33"/>
+    <rect x="729.2" y="30" width="1.6" height="533.33"/>
+    <rect x="779.2" y="30" width="1.6" height="533.33"/>
+    <rect x="829.2" y="30" width="1.6" height="533.33"/>
+    <rect x="879.2" y="30" width="1.6" height="533.33"/>
+    <rect x="929.2" y="30" width="1.6" height="533.33"/>
+    <rect x="979.2" y="30" width="1.6" height="533.33"/>
+    <rect x="1029.2" y="30" width="1.6" height="533.33"/>
+    <rect x="1079.2" y="30" width="1.6" height="533.33"/>
+  </g>
+  <!-- one-yard hash marks: along both sidelines and the two inbound rows -->
+  <g stroke="#f4f7f1" stroke-width="8" stroke-dasharray="1.4 8.6" fill="none" opacity="0.85">
+    <line x1="139.3" y1="36" x2="1130" y2="36"/>
+    <line x1="139.3" y1="557.33" x2="1130" y2="557.33"/>
+    <line x1="139.3" y1="246.25" x2="1130" y2="246.25"/>
+    <line x1="139.3" y1="347.5" x2="1130" y2="347.5"/>
+  </g>
+  <!-- two-point tries: short line on the 2-yard line at each end -->
+  <rect x="149.5" y="294.67" width="1.4" height="4" fill="#f4f7f1"/>
+  <rect x="1109.1" y="294.67" width="1.4" height="4" fill="#f4f7f1"/>
+  <!-- goal lines, end lines and sidelines -->
+  <g fill="#ffffff">
+    <rect x="128.4" y="30" width="3.2" height="533.33"/>
+    <rect x="1128.4" y="30" width="3.2" height="533.33"/>
+    <rect x="26" y="26" width="1208" height="4"/>
+    <rect x="26" y="563.33" width="1208" height="4"/>
+    <rect x="26" y="26" width="4" height="541.33"/>
+    <rect x="1230" y="26" width="4" height="541.33"/>
+  </g>
+  <!-- goal posts (seen from above: crossbar on the end line, gooseneck behind) -->
+  <g fill="#facc15">
+    <rect x="19" y="265.8" width="4" height="61.73" rx="2"/>
+    <rect x="9" y="294.67" width="12" height="4" rx="2"/>
+    <rect x="1237" y="265.8" width="4" height="61.73" rx="2"/>
+    <rect x="1239" y="294.67" width="12" height="4" rx="2"/>
+  </g>
+  <g fill="#000000" opacity="0.25">
+    <circle cx="8" cy="296.67" r="4"/>
+    <circle cx="1252" cy="296.67" r="4"/>
+  </g>
+</svg>

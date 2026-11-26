@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="{{H}}" viewBox="0 0 16 {{H}}">
+  <!-- Modern view: line of scrimmage (blue), drawn across the field. -->
+  <rect x="2" y="0" width="12" height="{{H}}" rx="6" fill="#3b82f6" opacity="0.28"/>
+  <rect x="5.5" y="0" width="5" height="{{H}}" rx="2.5" fill="#3b82f6"/>
+  <rect x="7.25" y="0" width="1.5" height="{{H}}" fill="#bfdbfe" opacity="0.8"/>
+</svg>

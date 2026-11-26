@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="{{W}}" height="{{H}}" viewBox="0 0 {{W}} {{H}}">
+  <!-- Modern view: card chrome. {{fill}} body, {{accent}} header strip of height {{AH}}. -->
+  <rect x="0" y="3" width="{{W}}" height="{{H}}" rx="{{R}}" fill="#000000" opacity="0.30"/>
+  <rect x="0" y="0" width="{{W}}" height="{{H}}" rx="{{R}}" fill="{{fill}}"/>
+  <rect x="0" y="0" width="{{W}}" height="{{AH}}" rx="{{R}}" fill="{{accent}}"/>
+  <rect x="0" y="{{AH2}}" width="{{W}}" height="{{R}}" fill="{{fill}}"/>
+  <rect x="0.75" y="0.75" width="{{W1}}" height="{{H1}}" rx="{{R}}" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.07"/>
+</svg>

@@ -12,10 +12,16 @@
 ##   program does) on the native host layer (res://host/).  This thread only
 ##   renders video memory, feeds keys and wakes the program thread; the BIOS
 ##   clock follows real time x the speed setting.
-## * Text modes are drawn by TextScreen with a vector font at the window's native
-##   resolution, filling a 16:9 screen ("HD text"). CGA graphics (instant replay)
-##   and the optional "retro" text view are rendered into an Image -> ImageTexture
-##   and shown 4:3, pillarboxed.
+## * Three views (toolbar "View" button, or --view=modern|hd|classic):
+##   - Modern (default): res://ui/ (ModernView) reads the program's memory and
+##     draws every screen with flat SVG vector art: the field top-down with the
+##     players as numbered discs, a scoreboard pill, cards and buttons.  It is
+##     presentation only: it never writes memory; its buttons send the same
+##     keys the screen asks for.
+##   - HD: text modes drawn by TextScreen with a vector font at the window's
+##     native resolution, filling a 16:9 screen; CGA graphics as a bitmap.
+##   - Classic: everything as the original bitmap (Image -> ImageTexture),
+##     4:3, pillarboxed.
 ## * The toolbar floats over the screen and hides itself; move the mouse to the
 ##   top edge to show it. F11 toggles fullscreen, F12 cycles the speed.
 ## * Maps Godot key events to PC/XT scancodes (make + break), so the native
@@ -23,11 +29,14 @@
 ## * Optional PC-speaker square wave through AudioStreamGenerator.
 extends Control
 
+enum View { MODERN, HD, CLASSIC }
+
 const TICK_HZ := 18.2065
 const SPEEDS := [1.0, 2.0, 4.0, 8.0, 0.0]   # 0 = turbo
 const TURBO_FACTOR := 32.0
 const MIX_RATE := 22050.0
 const RECOMP_DIR := "res://recomp"
+const VIEW_NAMES := ["Modern", "HD", "Classic"]
 ## A file every game folder has (data, not the program).
 const MARKER_FILE := "LEAGUE.NFL"
 
@@ -45,7 +54,9 @@ var image: Image = null
 var texture: ImageTexture = null
 var tex_rect: TextureRect = null
 var text_screen: TextScreen = null
+var modern: ModernView = null
 var toolbar: PanelContainer = null
+var toolbar_pinned: bool = false
 var hd_button: Button = null
 var colors_button: Button = null
 var aspect: AspectRatioContainer = null
@@ -70,7 +81,8 @@ var ips_timer: float = 0.0
 var ips_last: int = 0
 var ips: float = 0.0
 var sound_on: bool = true
-var hd_text: bool = true
+var view: int = View.MODERN
+var zoom_on: bool = false
 var start_fullscreen: bool = false
 
 
@@ -99,7 +111,15 @@ func _parse_args() -> void:
 		elif a == "--mute":
 			sound_on = false
 		elif a == "--retro":
-			hd_text = false
+			view = View.CLASSIC
+		elif a.begins_with("--view="):
+			var v := a.substr(7).to_lower()
+			if v == "hd":
+				view = View.HD
+			elif v == "classic" or v == "retro":
+				view = View.CLASSIC
+			else:
+				view = View.MODERN
 		elif a == "--modern-colors":
 			text_screen.set_modern_colors(true)
 		elif a == "--fullscreen":
@@ -237,6 +257,12 @@ func _build_ui() -> void:
 	bg.color = Color.BLACK
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
+	# Modern view (vector art, presentation only), under the other views.
+	modern = ModernView.new()
+	modern.set_anchors_preset(Control.PRESET_FULL_RECT)
+	modern.key_action.connect(_on_modern_key)
+	modern.ui_action.connect(_on_modern_ui)
+	add_child(modern)
 	# The emulated screen fills the whole window: HD text or the 4:3 bitmap view.
 	text_screen = TextScreen.new()
 	text_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -274,7 +300,7 @@ func _build_ui() -> void:
 	pause_button = _add_button(bar, "Pause", _on_pause_pressed)
 	_add_button(bar, "Reset", _on_reset_pressed)
 	_add_button(bar, "Game folder...", _on_folder_pressed)
-	hd_button = _add_button(bar, "Text: HD", _on_hd_pressed)
+	hd_button = _add_button(bar, "View: Modern", _on_hd_pressed)
 	colors_button = _add_button(bar, "Colors: classic", _on_colors_pressed)
 	_add_button(bar, "Fullscreen (F11)", _toggle_fullscreen)
 	_add_button(bar, "Screenshot", _on_screenshot_pressed)
@@ -354,7 +380,7 @@ func _on_sound_pressed() -> void:
 
 
 func _on_hd_pressed() -> void:
-	hd_text = not hd_text
+	view = (view + 1) % VIEW_NAMES.size()
 	_apply_view_buttons()
 
 
@@ -364,7 +390,14 @@ func _on_colors_pressed() -> void:
 
 
 func _apply_view_buttons() -> void:
-	hd_button.text = "Text: HD" if hd_text else "Text: retro"
+	hd_button.text = "View: " + VIEW_NAMES[view]
+	modern.visible = view == View.MODERN
+	if view != View.MODERN:
+		text_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+		text_screen.offset_left = 0
+		text_screen.offset_top = 0
+		text_screen.offset_right = 0
+		text_screen.offset_bottom = 0
 	colors_button.text = "Colors: modern" if text_screen.modern_colors else "Colors: classic"
 	if video:
 		video.last_mode = -1      # force a full bitmap repaint when switching back
@@ -383,9 +416,49 @@ func _toggle_fullscreen() -> void:
 func _update_toolbar(delta: float) -> void:
 	var mouse_y := get_viewport().get_mouse_position().y
 	var want := mouse_y < toolbar.size.y + 24.0 or paused or message.visible or machine == null
+	if view == View.MODERN and not message.visible and machine != null:
+		want = toolbar_pinned     # the Modern view has its own top bar
 	var target := 1.0 if want else 0.0
 	toolbar.modulate.a = move_toward(toolbar.modulate.a, target, delta * 6.0)
 	toolbar.visible = toolbar.modulate.a > 0.01
+
+
+## Modern view buttons: the key the screen asks for, as a key press.
+func _on_modern_key(key_name: String) -> void:
+	if machine == null:
+		return
+	var named := {"Enter": 0x1C, "Esc": 0x01, "Up": 0x48, "Down": 0x50, "Left": 0x4B,
+		"Right": 0x4D, "PgUp": 0x49, "PgDn": 0x51, "Home": 0x47, "End": 0x4F, "Space": 0x39}
+	var sc := -1
+	if named.has(key_name):
+		sc = named[key_name]
+	elif key_name.length() == 1:
+		var code := OS.find_keycode_from_string(key_name.to_upper())
+		if scancodes.has(code):
+			sc = scancodes[code]
+	if sc < 0:
+		return
+	machine.key_scancodes(PackedInt32Array([sc, sc | 0x80]))
+
+
+func _on_modern_ui(action: String) -> void:
+	match action:
+		"view":
+			_on_hd_pressed()
+		"speed":
+			_on_speed_pressed()
+		"pause":
+			_on_pause_pressed()
+		"sound":
+			_on_sound_pressed()
+		"screenshot":
+			_on_screenshot_pressed()
+		"fullscreen":
+			_toggle_fullscreen()
+		"more":
+			toolbar_pinned = not toolbar_pinned
+		"zoom":
+			zoom_on = not zoom_on
 
 
 func _on_screenshot_pressed() -> void:
@@ -433,7 +506,22 @@ func _update_video(delta: float) -> void:
 		blink_phase ^= 1
 	var md := machine.rb(BIOS.BDA_MODE)
 	var text_mode := md <= 3 or md == 7
-	var use_hd := hd_text and text_mode
+	if view == View.MODERN:
+		modern.ui = {"view_label": VIEW_NAMES[view],
+			"speed_label": speed_button.text.trim_prefix("Speed: "),
+			"paused": paused, "sound": sound_on, "subtitle": "", "zoom": zoom_on}
+		modern.refresh(machine, delta)
+		aspect.visible = false
+		# unrecognised screens: the HD text renderer inside the modern frame
+		var r := modern.textgrid_rect
+		text_screen.visible = r.size.x > 0.0 and text_mode
+		if text_screen.visible:
+			text_screen.set_anchors_preset(Control.PRESET_TOP_LEFT)
+			text_screen.position = r.position
+			text_screen.size = r.size
+			text_screen.refresh(machine, blink_phase)
+		return
+	var use_hd := view == View.HD and text_mode
 	text_screen.visible = use_hd
 	aspect.visible = not use_hd
 	if use_hd:
@@ -476,6 +564,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if k.pressed and code == KEY_F12:
 		_on_speed_pressed()
+		get_viewport().set_input_as_handled()
+		return
+	if k.pressed and code == KEY_PRINT:
+		_on_screenshot_pressed()
 		get_viewport().set_input_as_handled()
 		return
 	if not scancodes.has(code):

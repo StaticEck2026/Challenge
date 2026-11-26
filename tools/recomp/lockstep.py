@@ -20,6 +20,12 @@ Checks:
 
   python3 -I tools/recomp/lockstep.py --game-dir /path/to/nfl season
   python3 -I tools/recomp/lockstep.py --game-dir /path/to/nfl boot --max-services 400000
+  python3 -I tools/recomp/lockstep.py --game-dir /path/to/nfl --with-ui season
+
+--with-ui also runs the Modern view's layer (godot/ui: GameState.update() and
+Screens.build() on the program's memory, translated by gd2py --ui) on every
+BIOS tick of the recompiled side, the way main.gd runs it every frame, to
+show that it is passive: the run must still match the oracle exactly.
 
 The oracle trace of a scenario is cached in build/recomp/trace_<scenario>.pkl.
 """
@@ -331,7 +337,27 @@ def transpile(recomp_dir, log):
     return dst
 
 
-def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, recomp_dir=None):
+def ui_layer(log):
+    """The Modern view's layer on the recompiled machine: a tick hook that runs
+    GameState.update() and Screens.build() (read-only) like main.gd does."""
+    sys.path.insert(0, os.path.join(ROOT, "tools", "modern"))
+    import uimod
+    ui = uimod.load(log)
+    gs = ui.GameState()
+    screens = ui.Screens(ui.UiArt())
+    dl = ui.DrawList()
+    stats = {"frames": 0, "screens": {}}
+
+    def hook(mem):
+        gs.update(mem)
+        sid = screens.build(dl, gs, {"view_label": "Modern", "speed_label": "1x"})
+        stats["frames"] += 1
+        stats["screens"][sid] = stats["screens"].get(sid, 0) + 1
+    return hook, stats
+
+
+def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, recomp_dir=None,
+               with_ui=False):
     import importlib
     import gdrt
     from font_cp437 import FONT8
@@ -386,6 +412,10 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, re
                                                    or gm.ticks >= sc.get("max_ticks", 10 ** 9)):
             gm.abort = True
     gm.tick_hooks.append(gdrt.Callable(frame_hook))
+    ui_stats = None
+    if with_ui:
+        ui_hook, ui_stats = ui_layer(log)
+        gm.tick_hooks.append(gdrt.Callable(lambda: ui_hook(gm.cpu.mem)))
     cpu = gm.cpu
     trace = ref["trace"] if ref else None
     crcs = ref["crcs"] if ref else {}
@@ -425,6 +455,8 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, re
                snap=state.get("snap"), frames=frames,
                exe_opens=[e for e in gdos.file_log if "NFL.EXE" in str(e[1]).upper()])
     log("[recomp] opens of the program file (served from program.bin): %s" % res["exe_opens"])
+    if ui_stats is not None:
+        log("[ui] Modern layer ran on %d ticks: %s" % (ui_stats["frames"], ui_stats["screens"]))
     log("[recomp] %s: %d service calls, %d ticks, %.1fs, exited=%s code=%s, actions %d/%d, %d dispatched calls, "
         "%d dispatch misses, %d overlay loads" % (
             scenario, state["n"], gm.ticks, dt, gm.exited, gm.exit_code, ks.ai, len(ks.actions),
@@ -479,6 +511,8 @@ def main():
     ap.add_argument("--max-services", type=int, default=10 ** 9)
     ap.add_argument("--fresh-oracle", action="store_true", help="ignore a cached oracle trace")
     ap.add_argument("--no-oracle", action="store_true", help="run the recompiled program alone")
+    ap.add_argument("--with-ui", action="store_true",
+                    help="run the Modern view's GameState/Screens on every tick of the recompiled side")
     ap.add_argument("--diff-at", type=int, default=0,
                     help="debug: run both sides to service call N and list differing memory ranges")
     ap.add_argument("scenario", choices=list(scripts.SCENARIOS))
@@ -501,7 +535,7 @@ def main():
             pickle.dump(ref, open(cache, "wb"))
     transpile(a.recomp_dir, log)
     res = run_recomp(a.scenario, a.game_dir, a.polls_per_tick, ref, log, a.max_services,
-                     recomp_dir=a.recomp_dir)
+                     recomp_dir=a.recomp_dir, with_ui=a.with_ui)
     ok = res["error"] is None or res["error"] == ""
     if res["error"]:
         log("[lockstep] FAIL: %s" % res["error"])

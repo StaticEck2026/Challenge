@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="{{W}}" height="{{H}}" viewBox="0 0 {{W}} {{H}}">
+  <!-- Modern view: button chrome. {{fill}} face, {{line}} rim. -->
+  <rect x="0" y="0" width="{{W}}" height="{{H}}" rx="{{R}}" fill="{{fill}}"/>
+  <rect x="0.75" y="0.75" width="{{W1}}" height="{{H1}}" rx="{{R}}" fill="none" stroke="{{line}}" stroke-width="1.5"/>
+</svg>

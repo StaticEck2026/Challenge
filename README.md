@@ -10,6 +10,14 @@ interprets 8086 instructions at run time, and nobody re-implemented the game:
 the logic is the original program's, translated mechanically (see
 `docs/RECOMPILATION.md`).
 
+By default the game is shown in the **Modern view**: a presentation layer
+that reads the running program's memory and redraws every screen with flat
+SVG vector art in a 2D "match centre" style (the field top-down with the
+players as numbered team-coloured discs, a scoreboard pill, cards and
+buttons). It only reads memory and only sends the keys a screen asks for; the
+original program still decides everything. The HD-text and Classic (original
+bitmap) views are one click away. See `docs/MODERN_UI.md`.
+
 **No game files are included. Bring your own copy.** It goes in `godot/dos_c/`,
 which is gitignored. The recompiled code is derived from your copy and is
 written to `godot/recomp/`, which is also gitignored and never committed.
@@ -23,13 +31,14 @@ only the recompiled code, the baked program image and the data files. See
 |------|------|
 | `PROMPT.md`, `PROMPT_RECOMP.md` | The porting prompts that produced this work (emulator, then static recompilation), with errata |
 | `tools/recomp/` | The static recompiler (`recompile.py`: loader, decoder, discovery, liveness, GDScript backend), its address-only inputs `profile.json` and `hints.json`, the oracle profiler, the coverage report, the lockstep test and the thread-model smoke test |
-| `godot/` | Godot 4.3+ project. `host/` is the native host layer (DOS, BIOS, overlay manager, dispatcher, renderer); `recomp/` (generated, gitignored) is the recompiled program; `main.gd` runs it on a thread and handles display, keyboard, speaker and the game-folder picker; `text_screen.gd` draws text screens with a vector font at native resolution (sharp at 1080p, 16:9) |
+| `godot/` | Godot 4.3+ project. `host/` is the native host layer (DOS, BIOS, overlay manager, dispatcher, renderer); `recomp/` (generated, gitignored) is the recompiled program; `main.gd` runs it on a thread and handles display, keyboard, speaker and the game-folder picker; `ui/` is the Modern view (game-state reader with its address map `state_map.json`, screen classifier and layouts, SVG art in `ui/art/`); `text_screen.gd` draws text screens with a vector font at native resolution (sharp at 1080p, 16:9) |
+| `tools/modern/` | Modern-view tools: headless runs of the recompiled program (`harness.py`), state capture, SVG/PNG previews of the shipped layout code (`render.py`, `rasterize.js`), the player-position check against the CGA frame, and the memory-diffing research that found the addresses |
 | `tools/refemu/` | Python reference emulator, now a **test oracle only**. It runs the real game headless and takes screenshots |
 | `tools/disasm/` | Static analysis: MZ and PLINK86 overlay parser, relocation-aware disassembler, xref, team/window dumpers |
 | `tools/gdport/` | Test-only GDScript→Python translator and Godot API shim, used to run the Godot code (host layer + recompiled program) in lockstep with the oracle. `legacy_emu/` keeps the retired GDScript interpreter for reference and benchmarks |
 | `tools/preview_hd.py` | Renders real game screens at 1920x1080 the way `text_screen.gd` does, using Pillow, so the HD look can be checked without Godot |
 | `tools/check_port.py` | Confirms the legacy GDScript interpreter handles every opcode, interrupt service and port the oracle does |
-| `docs/` | `RECOMPILATION.md` (design, thread model, hints, limitations), `NFL_EXE_ANALYSIS.md`, `FILE_FORMATS.md`, `EMULATION_NOTES.md`, font license. The bundled TTF fonts and their licenses are in `godot/fonts/` |
+| `docs/` | `RECOMPILATION.md` (design, thread model, hints, limitations), `MODERN_UI.md` (the Modern view: design, game-state address map and evidence, screens, previews), `NFL_EXE_ANALYSIS.md`, `FILE_FORMATS.md`, `EMULATION_NOTES.md`, font license. The bundled fonts and their licenses are in `godot/fonts/` |
 
 Disassembly listings, screenshots and run directories are generated into
 `build/`, which is gitignored.
@@ -59,6 +68,10 @@ python3 -I tools/refemu/scenarios.py --game-dir $G season    # SEASON.COM + full
 python3 -I tools/refemu/scenarios.py --game-dir $G boot replay
 python3 -I tools/disasm/mz_info.py $G/NFL.EXE                # header + overlay table
 python3 -I tools/disasm/disasm.py  $G/NFL.EXE                # listings -> build/disasm/
+python3 -I tools/modern/capture.py --game-dir $G             # Modern view: real game states
+python3 -I tools/modern/render.py                            # -> build/shots/modern/*.png (1920x1080)
+python3 -I tools/modern/check_positions.py --game-dir $G --fast
+python3 -I tools/recomp/lockstep.py --game-dir $G --with-ui season   # lockstep with the Modern layer active
 ```
 
 ## Status
@@ -84,10 +97,19 @@ python3 -I tools/disasm/disasm.py  $G/NFL.EXE                # listings -> build
     `program.bin`.
   - Every `.gd` file passes `gdparse`, and `gdlint` with a relaxed config for
     the generated scripts. `godot/` contains no instruction interpreter.
+- **Modern view** (`docs/MODERN_UI.md`): the shipped layout code, translated
+  to Python, renders real game states captured from the recompiled program
+  to SVG, rasterised to 1920x1080 PNGs with Chromium. A check compares every
+  player position the view draws with the X/O sprites the game drew in the
+  CGA frame, and the yard scale with the yard lines it drew. `lockstep.py
+  --with-ui` passes for `season` and `boot` with the layer running on every
+  tick, so it is passive.
 - **Not verified:** the project has **never been opened in a real Godot
   editor**, because downloading the Godot binary was blocked in the build
   sandbox. The following are untested in Godot itself: compiling about
   490,000 generated lines, the program `Thread`, `main.gd` (window, input,
-  texture upload, audio, file dialog), `text_screen.gd`, and GDScript speed.
+  texture upload, audio, file dialog), `text_screen.gd`, the Modern view's
+  Godot drawing (`ui/modern_view.gd`: SVG rasterisation, text, input), and
+  GDScript speed.
   The thread model was exercised with Python threads
   (`tools/recomp/thread_smoke.py`). Expect small fixes on the first run.
