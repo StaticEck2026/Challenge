@@ -12,10 +12,15 @@ func _init() -> void:
 	var total_usec := 0
 	var slowest := ""
 	var slowest_usec := 0
+	var self_path: String = (get_script() as Script).resource_path
 	for path in files:
+		if path == self_path:
+			continue  # reloading the running script breaks it
+		print("[check] compiling %s" % path)
 		var t0 := Time.get_ticks_usec()
 		var s = ResourceLoader.load(path, "", ResourceLoader.CACHE_MODE_IGNORE)
 		var dt := Time.get_ticks_usec() - t0
+		print("[check]   %.2f s" % (dt / 1.0e6))
 		total_usec += dt
 		if dt > slowest_usec:
 			slowest_usec = dt
