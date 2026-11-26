@@ -43,7 +43,7 @@ var ea_reg: int = -1
 var irq_flag: bool = false
 var machine = null  # Machine (untyped to avoid a cyclic class reference)
 var parity: PackedByteArray = PackedByteArray()
-var trace: PackedInt32Array = PackedInt32Array()
+var trace: PackedInt64Array = PackedInt64Array()
 var trace_len: int = 0
 var trace_pos: int = 0
 

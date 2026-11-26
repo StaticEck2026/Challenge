@@ -1,0 +1,379 @@
+## Front-end for the NFL Challenge emulator.
+##
+## * Finds the game files (res://dos_c, user://dos_c, --dos-root=<path> or a
+##   folder picked in the app) and shows instructions if NFL.EXE is missing.
+## * Runs the emulated CPU inside a per-frame time budget; timer ticks follow
+##   real time (18.2 Hz x speed), or the instruction count in Turbo mode.
+## * Renders text / CGA video memory into an Image -> ImageTexture, 4:3.
+## * Maps Godot key events to PC/XT scancodes (make + break), so the emulated
+##   BIOS keyboard handler produces the right ASCII/scan words, incl. Alt/Ctrl.
+## * Optional PC-speaker square wave through AudioStreamGenerator.
+extends Control
+
+const TICK_HZ := 18.2065
+const SPEEDS := [1.0, 2.0, 4.0, 8.0, 0.0]   # 0 = turbo (as fast as possible)
+const FRAME_BUDGET_USEC := 14000
+const MIX_RATE := 22050.0
+
+## Godot physical keycode -> PC/XT set-1 scancode.
+var scancodes: Dictionary = {}
+
+var machine: Machine = null
+var bios: BIOS = null
+var dos: DOS = null
+var video: Video = null
+var image: Image = null
+var texture: ImageTexture = null
+var tex_rect: TextureRect = null
+var aspect: AspectRatioContainer = null
+var hud: Label = null
+var message: Label = null
+var speed_button: Button = null
+var pause_button: Button = null
+var file_dialog: FileDialog = null
+var player: AudioStreamPlayer = null
+var playback: AudioStreamGeneratorPlayback = null
+var phase: float = 0.0
+
+var dos_root: String = ""
+var write_root: String = ""
+var team_dir: String = "89"
+var program: String = "NFL.EXE"
+var program_args: String = ""
+var speed_index: int = 0
+var paused: bool = false
+var tick_acc: float = 0.0
+var blink_timer: float = 0.0
+var blink_phase: int = 0
+var ips_timer: float = 0.0
+var ips_last: int = 0
+var ips: float = 0.0
+var sound_on: bool = true
+
+
+func _ready() -> void:
+	_build_keymap()
+	_build_ui()
+	_parse_args()
+	_start()
+	_apply_speed()
+
+
+# ------------------------------------------------------------------ setup
+func _parse_args() -> void:
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--dos-root="):
+			dos_root = a.substr(11)
+		elif a.begins_with("--args="):
+			program_args = a.substr(7)
+		elif a.begins_with("--team-dir="):
+			team_dir = a.substr(11)
+		elif a.begins_with("--program="):
+			program = a.substr(10)
+		elif a == "--turbo":
+			speed_index = SPEEDS.size() - 1
+		elif a == "--mute":
+			sound_on = false
+
+
+func _has_game(dir: String) -> bool:
+	if dir == "" or not DirAccess.dir_exists_absolute(dir):
+		return false
+	for f in DirAccess.get_files_at(dir):
+		if f.to_upper() == program.to_upper():
+			return true
+	return false
+
+
+func _pick_root() -> bool:
+	write_root = ""
+	if dos_root != "" and _has_game(dos_root):
+		return true
+	if _has_game("user://dos_c"):
+		dos_root = "user://dos_c"
+		return true
+	if _has_game("res://dos_c"):
+		dos_root = "res://dos_c"
+		# res:// is read-only in exported builds: overlay writes in user://dos_c
+		write_root = "user://dos_c"
+		DirAccess.make_dir_recursive_absolute(write_root)
+		return true
+	return false
+
+
+func _start() -> void:
+	machine = null
+	if not _pick_root():
+		_show_message(
+			"Game files not found.\n\n"
+			+ "Copy your own NFL Challenge files (NFL.EXE, A..Q, LEAGUE.NFL, SEASON.COM,\n"
+			+ "and the team folder 89/) into the project folder  godot/dos_c/\n"
+			+ "(or into %s),\n" % ProjectSettings.globalize_path("user://dos_c")
+			+ "or start Godot with  -- --dos-root=/path/to/nfl\n"
+			+ "or press the \"Game folder...\" button above.\n\n"
+			+ "The files are not included: bring your own copy.")
+		return
+	message.visible = false
+	machine = Machine.new(20000)
+	machine.realtime = SPEEDS[speed_index] > 0.0
+	var now := Time.get_datetime_dict_from_system()
+	var secs: int = int(now["hour"]) * 3600 + int(now["minute"]) * 60 + int(now["second"])
+	var midnight: int = int(Time.get_unix_time_from_datetime_dict(
+		{"year": now["year"], "month": now["month"], "day": now["day"],
+		"hour": 0, "minute": 0, "second": 0}))
+	bios = BIOS.new(machine, FontCP437.font8(), "user://printer.txt", midnight, secs)
+	var root_pair := [dos_root, write_root]
+	var drives := {"A": root_pair, "B": root_pair, "C": root_pair}
+	var team := DOS.join_path(dos_root, team_dir)
+	if DirAccess.dir_exists_absolute(team):
+		var team_write := ""
+		if write_root != "":
+			team_write = DOS.join_path(write_root, team_dir)
+			DirAccess.make_dir_recursive_absolute(team_write)
+		drives["D"] = [team, team_write]
+	dos = DOS.new(machine, bios, drives, "C", "user://printer.txt")
+	var info := dos.load_program("C:" + program, program_args)
+	if info.is_empty():
+		_show_message("Could not load %s from %s" % [program, dos_root])
+		machine = null
+		return
+	machine.log_msg("[load] %s from %s %s" % [program, dos_root, str(info)])
+	video = Video.new()
+	tick_acc = 0.0
+
+
+func _show_message(text: String) -> void:
+	message.text = text
+	message.visible = true
+
+
+func _build_ui() -> void:
+	var bg := ColorRect.new()
+	bg.color = Color.BLACK
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
+	var vbox := VBoxContainer.new()
+	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(vbox)
+	var bar := HBoxContainer.new()
+	vbox.add_child(bar)
+	speed_button = _add_button(bar, "Speed: 1x", _on_speed_pressed)
+	pause_button = _add_button(bar, "Pause", _on_pause_pressed)
+	_add_button(bar, "Reset", _on_reset_pressed)
+	_add_button(bar, "Game folder...", _on_folder_pressed)
+	_add_button(bar, "Screenshot", _on_screenshot_pressed)
+	_add_button(bar, "Sound", _on_sound_pressed)
+	hud = Label.new()
+	hud.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hud.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	bar.add_child(hud)
+	aspect = AspectRatioContainer.new()
+	aspect.ratio = 4.0 / 3.0
+	aspect.stretch_mode = AspectRatioContainer.STRETCH_FIT
+	aspect.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(aspect)
+	tex_rect = TextureRect.new()
+	tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tex_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	tex_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	aspect.add_child(tex_rect)
+	message = Label.new()
+	message.set_anchors_preset(Control.PRESET_FULL_RECT)
+	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	message.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	message.add_theme_color_override("font_color", Color(1.0, 0.85, 0.3))
+	message.visible = false
+	add_child(message)
+	file_dialog = FileDialog.new()
+	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
+	file_dialog.title = "Choose the folder that contains NFL.EXE"
+	file_dialog.dir_selected.connect(_on_dir_selected)
+	add_child(file_dialog)
+	player = AudioStreamPlayer.new()
+	var gen := AudioStreamGenerator.new()
+	gen.mix_rate = MIX_RATE
+	gen.buffer_length = 0.1
+	player.stream = gen
+	add_child(player)
+	player.play()
+	playback = player.get_stream_playback()
+
+
+func _add_button(parent: Control, text: String, cb: Callable) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.focus_mode = Control.FOCUS_NONE
+	b.pressed.connect(cb)
+	parent.add_child(b)
+	return b
+
+
+# ---------------------------------------------------------------- buttons
+func _on_speed_pressed() -> void:
+	speed_index = (speed_index + 1) % SPEEDS.size()
+	_apply_speed()
+
+
+func _apply_speed() -> void:
+	if machine:
+		machine.realtime = SPEEDS[speed_index] > 0.0
+		if not machine.realtime:
+			machine.next_tick = machine.cpu.icount + machine.tick_len
+	var s: float = SPEEDS[speed_index]
+	speed_button.text = "Speed: %s" % ("turbo" if s == 0.0 else "%dx" % int(s))
+
+
+func _on_pause_pressed() -> void:
+	paused = not paused
+	pause_button.text = "Resume" if paused else "Pause"
+
+
+func _on_reset_pressed() -> void:
+	_start()
+
+
+func _on_folder_pressed() -> void:
+	file_dialog.popup_centered_ratio(0.7)
+
+
+func _on_dir_selected(dir: String) -> void:
+	dos_root = dir
+	_start()
+
+
+func _on_sound_pressed() -> void:
+	sound_on = not sound_on
+
+
+func _on_screenshot_pressed() -> void:
+	if image == null:
+		return
+	var path := "user://screenshot_%d.png" % Time.get_unix_time_from_system()
+	image.save_png(path)
+	if machine:
+		machine.log_msg("[shot] " + ProjectSettings.globalize_path(path))
+
+
+# ------------------------------------------------------------- main loop
+func _process(delta: float) -> void:
+	if machine == null:
+		return
+	if not paused and not machine.exited:
+		_run_frame(delta)
+	_update_video(delta)
+	_update_audio()
+	ips_timer += delta
+	if ips_timer >= 1.0:
+		ips = (machine.cpu.executed - ips_last) / ips_timer
+		ips_last = machine.cpu.executed
+		ips_timer = 0.0
+	var state := "exited (code %d)" % machine.exit_code if machine.exited else (
+		"paused" if paused else "running")
+	hud.text = "%s | %.2f M instr/s | ticks %d | mode %d" % [
+		state, ips / 1.0e6, machine.ticks, machine.rb(BIOS.BDA_MODE)]
+
+
+func _run_frame(delta: float) -> void:
+	var start := Time.get_ticks_usec()
+	var spd: float = SPEEDS[speed_index]
+	if spd > 0.0:
+		tick_acc += delta * TICK_HZ * spd
+		var n := 0
+		while tick_acc >= 1.0 and n < 8:
+			machine.tick()
+			tick_acc -= 1.0
+			n += 1
+		if tick_acc > 8.0:
+			tick_acc = 0.0
+		while Time.get_ticks_usec() - start < FRAME_BUDGET_USEC and not machine.exited:
+			var before := machine.cpu.icount
+			machine.pump_keyboard()
+			machine.run(4000)
+			if machine.cpu.icount == before:
+				break       # idle until the next tick
+	else:
+		while Time.get_ticks_usec() - start < FRAME_BUDGET_USEC and not machine.exited:
+			machine.pump_keyboard()
+			machine.run(4000)
+
+
+func _update_video(delta: float) -> void:
+	blink_timer += delta
+	if blink_timer >= 0.267:
+		blink_timer = 0.0
+		blink_phase ^= 1
+	if video.render(machine, blink_phase) or image == null:
+		var w := video.width
+		var h := video.height
+		if image == null or image.get_width() != w or image.get_height() != h:
+			image = Image.create_from_data(w, h, false, Image.FORMAT_RGB8, video.rgb)
+			texture = ImageTexture.create_from_image(image)
+			tex_rect.texture = texture
+		else:
+			image.set_data(w, h, false, Image.FORMAT_RGB8, video.rgb)
+			texture.update(image)
+
+
+func _update_audio() -> void:
+	if playback == null:
+		return
+	var freq := machine.speaker_freq() if sound_on else 0
+	var frames := playback.get_frames_available()
+	for _i in range(frames):
+		var v := 0.0
+		if freq > 20 and freq < 12000:
+			phase = fmod(phase + freq / MIX_RATE, 1.0)
+			v = 0.15 if phase < 0.5 else -0.15
+		playback.push_frame(Vector2(v, v))
+
+
+# --------------------------------------------------------------- keyboard
+func _unhandled_input(event: InputEvent) -> void:
+	if not (event is InputEventKey) or machine == null:
+		return
+	var k := event as InputEventKey
+	var code: int = k.physical_keycode if k.physical_keycode != KEY_NONE else k.keycode
+	if k.pressed and code == KEY_F12:
+		_on_speed_pressed()
+		get_viewport().set_input_as_handled()
+		return
+	if not scancodes.has(code):
+		return
+	var sc: int = scancodes[code]
+	var seq := PackedInt32Array()
+	if k.pressed:
+		seq.append(sc)
+	else:
+		seq.append(sc | 0x80)
+	machine.key_scancodes(seq)
+	machine.pump_keyboard()
+	get_viewport().set_input_as_handled()
+
+
+func _build_keymap() -> void:
+	var letters := {KEY_Q: 0x10, KEY_W: 0x11, KEY_E: 0x12, KEY_R: 0x13, KEY_T: 0x14,
+		KEY_Y: 0x15, KEY_U: 0x16, KEY_I: 0x17, KEY_O: 0x18, KEY_P: 0x19,
+		KEY_A: 0x1E, KEY_S: 0x1F, KEY_D: 0x20, KEY_F: 0x21, KEY_G: 0x22, KEY_H: 0x23,
+		KEY_J: 0x24, KEY_K: 0x25, KEY_L: 0x26, KEY_Z: 0x2C, KEY_X: 0x2D, KEY_C: 0x2E,
+		KEY_V: 0x2F, KEY_B: 0x30, KEY_N: 0x31, KEY_M: 0x32}
+	scancodes.merge(letters)
+	var digits := [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0]
+	for i in range(10):
+		scancodes[digits[i]] = 0x02 + i
+	var fkeys := [KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10]
+	for i in range(10):
+		scancodes[fkeys[i]] = 0x3B + i
+	scancodes.merge({
+		KEY_ESCAPE: 0x01, KEY_MINUS: 0x0C, KEY_EQUAL: 0x0D, KEY_BACKSPACE: 0x0E,
+		KEY_TAB: 0x0F, KEY_BRACKETLEFT: 0x1A, KEY_BRACKETRIGHT: 0x1B, KEY_ENTER: 0x1C,
+		KEY_KP_ENTER: 0x1C, KEY_CTRL: 0x1D, KEY_SEMICOLON: 0x27, KEY_APOSTROPHE: 0x28,
+		KEY_QUOTELEFT: 0x29, KEY_SHIFT: 0x2A, KEY_BACKSLASH: 0x2B, KEY_COMMA: 0x33,
+		KEY_PERIOD: 0x34, KEY_SLASH: 0x35, KEY_KP_DIVIDE: 0x35, KEY_KP_MULTIPLY: 0x37,
+		KEY_ALT: 0x38, KEY_SPACE: 0x39, KEY_CAPSLOCK: 0x3A, KEY_NUMLOCK: 0x45,
+		KEY_SCROLLLOCK: 0x46, KEY_HOME: 0x47, KEY_KP_7: 0x47, KEY_UP: 0x48, KEY_KP_8: 0x48,
+		KEY_PAGEUP: 0x49, KEY_KP_9: 0x49, KEY_KP_SUBTRACT: 0x4A, KEY_LEFT: 0x4B,
+		KEY_KP_4: 0x4B, KEY_KP_5: 0x4C, KEY_RIGHT: 0x4D, KEY_KP_6: 0x4D, KEY_KP_ADD: 0x4E,
+		KEY_END: 0x4F, KEY_KP_1: 0x4F, KEY_DOWN: 0x50, KEY_KP_2: 0x50, KEY_PAGEDOWN: 0x51,
+		KEY_KP_3: 0x51, KEY_INSERT: 0x52, KEY_KP_0: 0x52, KEY_DELETE: 0x53,
+		KEY_KP_PERIOD: 0x53, KEY_F11: 0x57})

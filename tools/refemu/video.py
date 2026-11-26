@@ -15,6 +15,23 @@ CGA4 = {
 }
 
 
+CP437_LOW = " ☺☻♥♦♣♠•◘○◙♂♀♪♫☼►◄↕‼¶§▬↨↑↓→←∟↔▲▼"
+
+
+def cp437_char(c):
+    """CP437 glyph as text: control codes as their PC glyphs, 0xFF as a space."""
+    if c < 32:
+        return CP437_LOW[c]
+    if c == 127:
+        return "⌂"
+    if c == 255:
+        return " "
+    return bytes([c]).decode("cp437")
+
+
+CP437_TABLE = [cp437_char(c) for c in range(256)]
+
+
 def video_state(m):
     mode = m.rb(BDA_MODE)
     return mode, m.rw(BDA_COLS) or 80, m.rb(BDA_PAGE), m.rw(BDA_PAGESIZE)
@@ -30,8 +47,7 @@ def text_dump(m, page=None):
     lines = []
     for row in range(25):
         a = base + row * cols * 2
-        raw = bytes(m.mem[a + 2 * c] for c in range(cols))
-        lines.append(raw.decode("cp437").replace("\x00", " ").rstrip())
+        lines.append("".join(CP437_TABLE[m.mem[a + 2 * c]] for c in range(cols)).rstrip(" "))
     return "\n".join(lines)
 
 
@@ -113,11 +129,14 @@ def render_rgb(m, font8, font16=None, blink_phase=0):
     return width, height, bytes(out)
 
 
-def write_png(path, w, h, rgb, yscale=1):
+def write_png(path, w, h, rgb, yscale=1, xscale=1):
     raw = bytearray()
     stride = w * 3
     for y in range(h):
-        row = b"\x00" + rgb[y * stride:(y + 1) * stride]
+        line = rgb[y * stride:(y + 1) * stride]
+        if xscale > 1:
+            line = b"".join(line[x * 3:x * 3 + 3] * xscale for x in range(w))
+        row = b"\x00" + line
         for _ in range(yscale):
             raw += row
     h2 = h * yscale
@@ -125,7 +144,7 @@ def write_png(path, w, h, rgb, yscale=1):
     def chunk(tag, data):
         c = struct.pack(">I", len(data)) + tag + data
         return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
-    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h2, 8, 2, 0, 0, 0))
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w * xscale, h2, 8, 2, 0, 0, 0))
     png += chunk(b"IDAT", zlib.compress(bytes(raw), 6)) + chunk(b"IEND", b"")
     with open(path, "wb") as fp:
         fp.write(png)
@@ -134,5 +153,6 @@ def write_png(path, w, h, rgb, yscale=1):
 def screenshot(m, path, font8, font16=None):
     w, h, rgb = render_rgb(m, font8, font16)
     yscale = 2 if h == 200 else 1
-    write_png(path, w, h, rgb, yscale)
+    xscale = 2 if w == 320 else 1
+    write_png(path, w, h, rgb, yscale, xscale)
     return path

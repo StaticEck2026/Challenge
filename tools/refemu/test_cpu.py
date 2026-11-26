@@ -30,10 +30,24 @@ def assemble(src):
         return open(out, "rb").read()
 
 
+def default_factory(hle):
+    cpu = CPU(bytearray(0x100000 + 16))
+    cpu.hle = hle
+    return cpu
+
+
+# test_gdport.py swaps this for the CPU transpiled from godot/emu/cpu.gd
+CPU_FACTORY = [default_factory]
+
+
 def run(src, **init):
     code = assemble(src)
-    mem = bytearray(0x100000 + 16)
-    cpu = CPU(mem)
+    ints = []
+
+    def hle(n):
+        ints.append(n)
+    cpu = CPU_FACTORY[0](hle)
+    mem = cpu.mem
     seg = 0x1000
     mem[(seg << 4) + 0x100:(seg << 4) + 0x100 + len(code)] = code
     for i in range(4):
@@ -46,11 +60,6 @@ def run(src, **init):
             cpu.r[names.index(k)] = v
         else:
             setattr(cpu, k, v)
-    ints = []
-
-    def hle(n):
-        ints.append(n)
-    cpu.hle = hle
     # INT 0 vector -> a HLT at 0000:0500 so divide errors are observable
     mem[0] = 0x00
     mem[1] = 0x05

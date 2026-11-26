@@ -24,11 +24,10 @@ const TICKS_PER_DAY := 0x1800B0
 ## 1989-08-08 00:00:00 (the deterministic default start date, same as Python).
 const DEFAULT_EPOCH := 618537600
 
+## RGB 0xRRGGBB of the 16 CGA colours.
 const CGA_PALETTE := [
-	Color8(0, 0, 0), Color8(0, 0, 170), Color8(0, 170, 0), Color8(0, 170, 170),
-	Color8(170, 0, 0), Color8(170, 0, 170), Color8(170, 85, 0), Color8(170, 170, 170),
-	Color8(85, 85, 85), Color8(85, 85, 255), Color8(85, 255, 85), Color8(85, 255, 255),
-	Color8(255, 85, 85), Color8(255, 85, 255), Color8(255, 255, 85), Color8(255, 255, 255)]
+	0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+	0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF]
 
 ## mode -> [cols, rows, graphics bpp (0 = text), page size, mode register]
 const MODE_INFO := {
@@ -162,6 +161,12 @@ func now() -> Dictionary:
 	var secs := int(get_ticks() / 18.2065)
 	var unix := start_epoch + secs + 86400 * days
 	return Time.get_datetime_dict_from_unix_time(unix)
+
+
+## 1/100 s part of the emulated time of day (for INT 21h AH=2Ch).
+func hundredths() -> int:
+	var secs_f := get_ticks() / 18.2065
+	return int((secs_f - int(secs_f)) * 100)
 
 
 func int05() -> int:

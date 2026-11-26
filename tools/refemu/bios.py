@@ -150,10 +150,14 @@ class BIOS:
 
     def now(self):
         """Emulated wall-clock time (deterministic: derived from the tick count)."""
-        t = self.get_ticks()
-        secs = t / 18.2065
+        secs = int(self.get_ticks() / 18.2065)
         base = datetime.datetime(self.start_time.year, self.start_time.month, self.start_time.day)
         return base + datetime.timedelta(seconds=secs + 86400 * self.days)
+
+    def hundredths(self):
+        """1/100 s part of the emulated time of day (for INT 21h AH=2Ch)."""
+        secs_f = self.get_ticks() / 18.2065
+        return int((secs_f - int(secs_f)) * 100)
 
     days = 0
 

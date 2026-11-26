@@ -137,7 +137,7 @@ class DOS:
             largest = max(largest, size)
         return None, largest, ERR_NOMEM
 
-    def free(self, block):
+    def free_block(self, block):
         seg = block - 1
         kind, owner, size = self.mcb_read(seg)
         if kind not in (0x4D, 0x5A):
@@ -574,6 +574,10 @@ class DOS:
             r[0] = ax & 0xFF00
         elif ah == 0x0D:
             pass
+        elif ah == 0x0F or ah == 0x10 or ah == 0x27:
+            return self.fcb_io(ah)
+        elif ah == 0x29:
+            return self.fcb_parse(al)
         elif ah == 0x0E:
             if 0 <= (r[2] & 0xFF) < 26 and chr(65 + (r[2] & 0xFF)) in self.drives:
                 self.cur_drive = chr(65 + (r[2] & 0xFF))
@@ -601,7 +605,7 @@ class DOS:
         elif ah == 0x2C:
             n = self.bios.now()
             r[1] = (n.hour << 8) | n.minute
-            r[2] = (n.second << 8) | (n.microsecond // 10000)
+            r[2] = (n.second << 8) | self.bios.hundredths()
         elif ah == 0x2D:
             r[0] = ax & 0xFF00
         elif ah == 0x2E:
@@ -798,7 +802,7 @@ class DOS:
                 return self.err(e)
             self.ok(seg)
         elif ah == 0x49:
-            e = self.free(sr[0])
+            e = self.free_block(sr[0])
             if e:
                 return self.err(e)
             self.ok()
@@ -976,6 +980,147 @@ class DOS:
                 f.fp.write(data)
                 f.fp.flush()
         self.ok(n)
+
+    # ------------------------------------------------------------------ FCBs
+    def fcb_addr(self):
+        a = (self.cpu.sr[3] << 4) + self.cpu.r[2]
+        if self.m.rb(a) == 0xFF:          # extended FCB
+            a += 7
+        return a
+
+    def fcb_name(self, a):
+        drv = self.m.rb(a)
+        raw = bytes(self.m.rb(a + 1 + i) for i in range(11)).decode("latin-1")
+        base, ext = raw[:8].rstrip(), raw[8:].rstrip()
+        name = base + ("." + ext if ext else "")
+        if drv:
+            name = chr(64 + drv) + ":" + name
+        return name
+
+    def fcb_io(self, ah):
+        """AH=0Fh open, 10h close, 27h random block read (DOS 1.x style file I/O)."""
+        cpu = self.cpu
+        r = cpu.r
+        m = self.m
+        a = self.fcb_addr()
+        if not hasattr(self, "fcbs"):
+            self.fcbs = {}
+        if ah == 0x0F:
+            host = self.resolve(self.fcb_name(a))
+            if host is None or host.startswith("DEV:") or os.path.isdir(host):
+                r[0] = (r[0] & 0xFF00) | 0xFF
+                return None
+            self.fcbs[a] = open(host, "rb")
+            self.file_log.append(("fcb-open", self.fcb_name(a), host))
+            if m.rb(a) == 0:
+                m.wb(a, ord(self.cur_drive) - 64)
+            m.ww(a + 0x0C, 0)
+            m.ww(a + 0x0E, 128)
+            size = os.path.getsize(host)
+            m.ww(a + 0x10, size & 0xFFFF)
+            m.ww(a + 0x12, size >> 16)
+            m.ww(a + 0x14, ((1989 - 1980) << 9) | (8 << 5) | 8)
+            m.ww(a + 0x16, 0x6000)
+            m.wb(a + 0x20, 0)
+            r[0] &= 0xFF00
+        elif ah == 0x10:
+            fp = self.fcbs.pop(a, None)
+            if fp:
+                fp.close()
+            r[0] &= 0xFF00
+        else:
+            fp = self.fcbs.get(a)
+            if fp is None:
+                r[0] = (r[0] & 0xFF00) | 1
+                r[1] = 0
+                return None
+            recsize = m.rw(a + 0x0E) or 128
+            rec = m.rw(a + 0x21) | (m.rw(a + 0x23) << 16 if recsize < 64 else (m.rb(a + 0x23) << 16))
+            n = r[1]
+            fp.seek(rec * recsize)
+            data = fp.read(n * recsize)
+            full = len(data) // recsize
+            part = len(data) % recsize
+            seg, off = self.dta
+            base = (seg << 4) + off
+            for i, c in enumerate(data):
+                m.wb(base + i, c)
+            if part:
+                for i in range(part, recsize):
+                    m.wb(base + full * recsize + i, 0)
+            got = full + (1 if part else 0)
+            rec += got
+            m.ww(a + 0x21, rec & 0xFFFF)
+            m.wb(a + 0x23, (rec >> 16) & 0xFF)
+            m.ww(a + 0x0C, rec // 128)
+            m.wb(a + 0x20, rec % 128)
+            r[1] = got
+            al = 0 if got == n and not part else (3 if part else 1)
+            r[0] = (r[0] & 0xFF00) | al
+        return None
+
+    def fcb_parse(self, al):
+        """AH=29h: parse DS:SI into the FCB at ES:DI."""
+        cpu = self.cpu
+        r = cpu.r
+        m = self.m
+        src = cpu.sr[3] << 4
+        si = r[6]
+        dst = (cpu.sr[0] << 4) + r[7]
+
+        def ch(i):
+            return chr(m.rb(src + ((si + i) & 0xFFFF)))
+        i = 0
+        if al & 1:
+            while ch(i) in " \t;,=+:":
+                i += 1
+        else:
+            while ch(i) in " \t":
+                i += 1
+        result = 0
+        drv = 0
+        if ch(i + 1) == ":" and ch(i).isalpha():
+            drv = ord(ch(i).upper()) - 64
+            if chr(64 + drv) not in self.drives:
+                result = 0xFF
+            i += 2
+        if drv or not (al & 2):
+            m.wb(dst, drv)
+        term = set(' \t\r\n.;,=+:"/[]<>|\0')
+
+        def field(i, width, keep):
+            out = ""
+            while ch(i) not in term and len(out) < 64:
+                out += ch(i).upper()
+                i += 1
+            if not out and keep:
+                return i, None
+            out = out[:width]
+            if "*" in out:
+                out = out[:out.index("*")] + "?" * (width - out.index("*"))
+            return i, out.ljust(width)
+        i, base = field(i, 8, al & 4)
+        if base is not None:
+            for k in range(8):
+                m.wb(dst + 1 + k, ord(base[k]))
+        elif not (al & 4):
+            for k in range(8):
+                m.wb(dst + 1 + k, 32)
+        ext = None
+        if ch(i) == ".":
+            i, ext = field(i + 1, 3, False)
+        if ext is not None:
+            for k in range(3):
+                m.wb(dst + 9 + k, ord(ext[k]))
+        elif not (al & 8):
+            for k in range(3):
+                m.wb(dst + 9 + k, 32)
+        name = bytes(m.rb(dst + 1 + k) for k in range(11))
+        if result != 0xFF and b"?" in name:
+            result = 1
+        r[6] = (si + i) & 0xFFFF
+        r[0] = (r[0] & 0xFF00) | result
+        return None
 
     # ------------------------------------------------------------- find file
     def match83(self, pattern, name):

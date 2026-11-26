@@ -225,9 +225,6 @@ class CPU:
         """Second word of a memory operand (for LES/LDS/far pointers)."""
         return self.rw(((self.sr[self.ea_seg] << 4) + ((self.ea_off + 2) & 0xFFFF)))
 
-    def seg_default(self, seg):
-        return self.ovr if self.ovr >= 0 else seg
-
     # ------------------------------------------------------------------- ALU
     def alu8(self, op, a, b):
         if op == 0:      # ADD
