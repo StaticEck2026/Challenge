@@ -37,46 +37,68 @@ game data, in this project. **Bring your own copy of the game.**
 
 ## Install the game files
 
-1. Copy the contents of your NFL Challenge disks into `godot/dos_c/`
-   (the folder is in `.gitignore`), keeping the team disk in a sub-folder:
+`NFL.EXE` is needed **once**, as the recompiler's input. The running game
+never opens it. It runs from the generated code and the baked program image,
+and reads only the game's data files.
+
+1. **Recompile your NFL.EXE** (Python 3, no other dependencies):
+
+   ```sh
+   python3 tools/recomp/recompile.py /path/to/nfl/NFL.EXE [--bundle-data]
+   ```
+
+   This takes a couple of seconds and writes `godot/recomp/`:
+   * about 24 scripts (about 10 MB of GDScript);
+   * `program.bin` (about 300 KB): the MZ header values, the root image already
+     relocated for the fixed load segment, and the file's overlay section. The
+     native overlay manager reads that section through a read-only virtual
+     `NFL.EXE`, so the file does not have to exist on any drive. Its SHA-1 must
+     match `PROGRAM_SHA1` in `recomp_index.gd`, otherwise the HUD says to
+     recompile;
+   * with `--bundle-data`, `game/`: a copy of the game's data files, which is
+     everything in the EXE's folder and its subfolders except programs
+     (`.EXE`, `.COM`, `.BAT`).
+
+   The folder is in `.gitignore`. Everything in it is derived from your
+   copyrighted files, so never commit or distribute it. Run the command again
+   after updating the translator. Without `recomp/` the app shows this
+   instruction.
+
+2. **Provide the data files** (`A`...`Q`, `LEAGUE.NFL` and the team folder;
+   `NFL.EXE` is not needed). The first folder that contains `LEAGUE.NFL`
+   wins, searched in this order:
+   * `--dos-root=<path>` on the command line;
+   * `user://dos_c/` (for example
+     `~/.local/share/godot/app_userdata/NFL Challenge (PC emulator)/dos_c`);
+   * `res://dos_c/`, that is `godot/dos_c/` (gitignored);
+   * `res://recomp/game/`, written by `--bundle-data`.
 
    ```
-   godot/dos_c/NFL.EXE
    godot/dos_c/A ... Q            (program data files)
    godot/dos_c/LEAGUE.NFL
-   godot/dos_c/SEASON.COM         (optional, season file builder)
    godot/dos_c/89/                (team disk: *.NFL, *.ROS, PBP.NFL, PLYB.NFL, PLS.NFL, CURVES.NFL)
    ```
 
-   Other places that are searched, in this order:
-   `--dos-root=<path>` on the command line, `user://dos_c/`
-   (e.g. `~/.local/share/godot/app_userdata/NFL Challenge (PC emulator)/dos_c`),
-   then `res://dos_c/`. You can also press **Game folder...** in the running app
-   and pick any folder that contains `NFL.EXE`. If nothing is found, the app
-   shows these instructions on screen.
-
-2. **Recompile your NFL.EXE once** (Python 3, no other dependencies):
-
-   ```sh
-   python3 tools/recomp/recompile.py godot/dos_c/NFL.EXE
-   ```
-
-   This writes about 24 scripts (about 10 MB of GDScript) to `godot/recomp/`
-   in a couple of seconds. The folder is in `.gitignore`. The code is derived
-   from your copyrighted binary, so never commit or distribute it. Run the
-   command again after updating the translator. Without `recomp/`, the app
-   shows this instruction.
+   You can also press **Game folder...** in the running app and pick any
+   folder with the data files. If nothing is found, the app shows these
+   instructions on screen.
 
 3. Open the `godot/` folder in the Godot 4.3+ editor once (it imports the
    scripts and registers the `class_name`s), then press **Play**. On start the
    program thread loads the recompiled scripts. The HUD says
    "loading recompiled code..." until it has compiled them.
 
+**Standalone export.** Recompile with `--bundle-data`. In the export preset,
+under *Resources → Filters to export non-resource files/folders*, add
+`recomp/*.bin, recomp/game/*`. Godot packs only resources by default, and
+`program.bin` and the data files are plain files. The exported game then needs
+nothing else. Saves, `config.nfl` and `stats.log` go to `user://dos_c/`.
+
 ### Drives
 
 | DOS drive | Host folder |
 |-----------|-------------|
-| `A:` `B:` `C:` | the game folder (`NFL.EXE` lives here; `C:` is current) |
+| `A:` `B:` `C:` | the game data folder (`C:` is current). A read-only virtual `NFL.EXE` exists on every drive for the overlay manager |
 | `D:` | `<game folder>/89` (the team disk; choose another with `--team-dir=84` or `--team-dir=Greats`) |
 
 On the first start the game has no `config.nfl` and runs its CONFIGURATION
@@ -86,7 +108,7 @@ dialog. Answer **4** (team disk on drive D), **4** (colour graphics display),
 ### Writes
 
 The game writes `config.nfl`, `stats.log`, `avgstats.log` and saved games.
-When the game folder is `res://dos_c` (read-only in exported builds), writes go
+When the game folder is `res://dos_c` or `res://recomp/game` (read-only in exported builds), writes go
 to `user://dos_c/` instead: new files are created there, and an existing file
 is copied there before it is opened for writing; reads look in `user://dos_c/`
 first. A folder given with `--dos-root` or picked in the app is written in
@@ -98,10 +120,9 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 
 | Option | Meaning |
 |--------|---------|
-| `--dos-root=<path>` | folder with `NFL.EXE` |
+| `--dos-root=<path>` | folder with the game's data files (`NFL.EXE` not needed) |
 | `--args=<tail>` | DOS command tail for the program: `/i` instant replay on, `/s` season mode (reads `season.nfl` from the team disk, computer coaches, writes `stats.log`, exits), `/r` restore a saved game, `/l` log mode |
 | `--team-dir=<sub>` | sub-folder mapped as drive `D:` (default `89`) |
-| `--program=<file>` | name of the program file in the game folder (default `NFL.EXE`). Only `NFL.EXE` is recompiled, so other programs such as `SEASON.COM` cannot run in this build. Build `season.nfl` with SEASON.COM under DOS or in `tools/refemu/` (`scenarios.py season`), or write it by hand: the number of games, then one `Home Visitor` line per game, for example `1`, then `Bills Dolphins` |
 | `--turbo` | start in turbo speed |
 | `--mute` | no PC-speaker sound |
 | `--fullscreen` | start in fullscreen |
@@ -131,7 +152,7 @@ paused).
 | *Colors: classic / modern* | the 16 CGA colours, or a softer modern palette with the same hues (HD text only) |
 | *Pause* | pause / resume the program (its thread waits) |
 | *Reset* | reboot the program |
-| *Game folder...* | pick the folder with `NFL.EXE` |
+| *Game folder...* | pick the folder with the game's data files |
 | *Screenshot* | save what is on screen to `user://screenshot_<time>.png` |
 | *Sound* | toggle the PC speaker |
 
@@ -164,7 +185,9 @@ drawn with Pillow) and renders real game screens at 1920x1080 without Godot:
 
 ```
 recomp/            GENERATED from your NFL.EXE by tools/recomp/recompile.py (gitignored):
-                   u_r_N.gd root code, u_oNN_M.gd overlay N, recomp_index.gd dispatch table
+                   u_r_N.gd root code, u_oNN_M.gd overlay N, recomp_index.gd dispatch table,
+                   program.bin baked program image, game/ data files (--bundle-data)
+host/program_blob.gd  reads program.bin;  host/mem_file.gd  the virtual NFL.EXE
 main.gd            front-end: starts the program thread, renders, keyboard, audio, folder picker
 host/recomp_host.gd   runtime: links the units, native PLINK86 start-up and overlay manager,
                    ROM-stub services (INT n and int86()), dispatcher for indirect transfers
@@ -172,7 +195,7 @@ host/recomp_unit.gd   base class of the generated scripts
 host/cpu_state.gd  registers, flags and the 1 MB memory (no decoder)
 host/machine.gd    ROM stubs/IVT/BDA, I/O ports, keyboard queue, clock, service dispatcher
 host/bios.gd       INT 10h video (text + CGA 4/5/6), 16h keyboard (BDA ring buffer), 1Ah, ...
-host/dos.gd        MZ loader, PSP, environment, MCB chain, INT 21h (handles, FCBs, memory,
+host/dos.gd        program set-up from program.bin, PSP, environment, MCB chain, INT 21h (handles, FCBs, memory,
                    find first/next, console), case-insensitive 8.3 drive mapping
 host/video.gd      incremental bitmap renderer (CGA, retro text) + text dump
 host/font_cp437.gd 8x8 / 8x16 CP437 bitmap font (see docs/FONT_LICENSE.txt)
@@ -203,12 +226,18 @@ service calls per second.
 * Not run in Godot (see the status box above); `main.gd` is untested.
 * `recomp/` must be regenerated (one command, above) for every fresh checkout:
   it is not committed. The translator targets this exact `NFL.EXE` (v2.01,
-  8/8/89). `main.gd` refuses a program that loads at another segment.
+  8/8/89).
+* Only `NFL.EXE` is recompiled, so `SEASON.COM` (which builds `season.nfl` for
+  `/s`) cannot run here. Build `season.nfl` under DOS or with `tools/refemu/`
+  (`scenarios.py season`), or write it by hand: the number of games, then one
+  `Home Visitor` line per game, for example `1`, then `Bills Dolphins`. The
+  `--program=` option is gone.
 * A code path that the profiling runs never reached and that uses a new
   indirect jump target stops with `dispatch miss at SSSS:OOOO` on the HUD.
   See "Limitations" in `docs/RECOMPILATION.md`.
-* Exported builds: Godot only packs resource files by default, so put the game
-  files in `user://dos_c/` or use `--dos-root` instead of `res://dos_c/`.
+* Exported builds: Godot only packs resource files by default. Add the
+  non-resource filter above (`recomp/*.bin, recomp/game/*`), or put the data
+  files in `user://dos_c/` or use `--dos-root`.
 * Truncating a file with a zero-length write (`INT 21h AH=40h CX=0`) is ignored
   (the game does not use it).
 * No 8087 (the game only probes for one), no EGA/VGA (the game uses CGA or MDA

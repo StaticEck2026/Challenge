@@ -213,6 +213,19 @@ to Python by `tools/gdport/gd2py.py`. No Godot binary was available.
 | GDScript syntax | `gdparse`; `gdlint` (`godot/`: `main.gd text_screen.gd host/*.gd`; `godot/recomp/`: relaxed `gdlintrc`) | all files pass |
 | No interpreter | `grep -rn "match op\|fetch8\|exec_op\|modrm" godot/ --include=*.gd` | no matches |
 
+**No NFL.EXE at run time.** The recompiled side of `lockstep.py` and of
+`thread_smoke.py` deletes `NFL.EXE` from its run folder. It sets the program
+up from `godot/recomp/program.bin` (`DOS.install_program`). The overlay
+manager's one open of the program file is served by the virtual file, and
+the oracle's file log shows that the program code itself never opens its EXE.
+Rerun this way, without the EXE:
+* `season`: identical, `STATS.LOG` byte-identical;
+* `boot`: identical, 4,137 CGA frames;
+* both with 0 dispatch misses, recompiled 34.1 s and 31.1 s against the
+  oracle's 176.9 s and 162.7 s (5.2x);
+* `thread_smoke.py --game-dir godot/recomp/game`: passes from the
+  `--bundle-data` folder alone.
+
 **Deterministic clock for lockstep.** The oracle's timer IRQ fires at
 arbitrary instructions, which a recompiled program cannot reproduce. Both
 sides therefore advance the BIOS tick every 64 polls (service calls through a

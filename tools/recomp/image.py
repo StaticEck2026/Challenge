@@ -23,6 +23,7 @@ LOAD_SEG = PSP_SEG + 0x10
 class Program:
     def __init__(self, exe_path, base=LOAD_SEG):
         self.exe = NflExe(exe_path)
+        self.exe_path = exe_path
         self.base = base
         e = self.exe
         self.root = bytes(apply_relocs(e.image, e.relocs, 0, base))

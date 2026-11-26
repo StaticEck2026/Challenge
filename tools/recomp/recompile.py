@@ -11,13 +11,22 @@ tools/recomp/hints.json (address-keyed translation hints with evidence).
 Writes godot/recomp/ (gitignored: the output is derived from the copyrighted
 binary and must never be committed):
   u_*.gd          one script per group of functions (root segments / overlays)
-  recomp_index.gd unit list, entry point and the dispatch table
+  recomp_index.gd unit list, entry point, the dispatch table, PROGRAM_SHA1
+  program.bin     the program image the run time needs instead of NFL.EXE:
+                  MZ header values, the root image relocated for load segment
+                  0122h, and the overlay section of the file (read by the
+                  native overlay manager through a virtual file)
+  game/           with --bundle-data: the game's data files (everything in the
+                  EXE's folder except programs), for a standalone export
 and build/recomp/manifest.json (translated instruction addresses, used by the
 coverage report).
 """
 import argparse
+import hashlib
 import json
 import os
+import shutil
+import struct
 import sys
 import time
 
@@ -190,6 +199,7 @@ def generate(prog, an, out_dir, comments=False, log=print):
            "const LOAD_SEG := 0x%X" % prog.base,
            "const UNITS := [%s]" % ", ".join('"%s"' % n for n, _ in files)]
     entry = an.funcs[("root", 0x13F3 + prog.base, 7)]
+    idx.append('const PROGRAM_SHA1 := "%s"' % write_program_blob(prog, out_dir))
     idx.append('const ENTRY_UNIT := "%s"' % entry.file)
     idx.append('const ENTRY_FUNC := "%s"' % entry.name)
     idx.append("const FUNCTIONS := %d" % len(an.funcs))
@@ -210,6 +220,50 @@ def generate(prog, an, out_dir, comments=False, log=print):
         len(an.funcs), sum(len(f.insns) for f in an.funcs.values()),
         sum(len(f.blocks) for f in an.funcs.values()), len(files), total_lines, out_dir))
     return files
+
+
+BLOB_MAGIC = b"NFLRCMP1"
+
+
+def write_program_blob(prog, out_dir):
+    """program.bin (layout documented in godot/host/program_blob.gd)."""
+    e = prog.exe
+    h = e.hdr
+    data = e.data
+    sha = hashlib.sha1(data).digest()
+    ovl = data[e.image_end:]
+    name = os.path.basename(prog.exe_path).upper().encode("ascii", "replace")[:15]
+    head = BLOB_MAGIC + sha + struct.pack("<8H4I", prog.base, h.cs, h.ip, h.ss, h.sp, h.minalloc,
+                                          h.maxalloc, h.crlc, len(prog.root), len(data), e.image_end,
+                                          len(ovl))
+    head += name.ljust(16, b"\0")
+    assert len(head) == 76
+    with open(os.path.join(out_dir, "program.bin"), "wb") as fp:
+        fp.write(head + prog.root + ovl)
+    return sha.hex()
+
+
+PROGRAM_EXTS = (".EXE", ".COM", ".BAT", ".WHL")
+
+
+def bundle_data(exe, out_dir, log=print):
+    """Copy the game's data files (the EXE's folder minus programs) to out_dir/game."""
+    src = os.path.dirname(os.path.abspath(exe))
+    dst = os.path.join(out_dir, "game")
+    if os.path.exists(dst):
+        shutil.rmtree(dst)
+    n = size = 0
+    for dp, dn, fn in os.walk(src):
+        dn[:] = sorted(d for d in dn if not d.startswith("."))
+        rel = os.path.relpath(dp, src)
+        for f in sorted(fn):
+            if f.upper().endswith(PROGRAM_EXTS) or f.startswith("."):
+                continue
+            os.makedirs(os.path.join(dst, rel), exist_ok=True)
+            shutil.copy2(os.path.join(dp, f), os.path.join(dst, rel, f))
+            n += 1
+            size += os.path.getsize(os.path.join(dp, f))
+    log("[recomp] --bundle-data: %d data files (%d KB) -> %s" % (n, size // 1024, dst))
 
 
 def write_manifest(prog, an, path):
@@ -235,6 +289,8 @@ def main(argv=None):
     ap.add_argument("--hints", default=os.path.join(HERE, "hints.json"))
     ap.add_argument("--manifest", default=os.path.join(ROOT, "build", "recomp", "manifest.json"))
     ap.add_argument("--comments", action="store_true", help="annotate every instruction in the output")
+    ap.add_argument("--bundle-data", action="store_true",
+                    help="also copy the game's data files to <out>/game (standalone export)")
     a = ap.parse_args(argv)
     t0 = time.time()
     profiles = a.profile or [os.path.join(HERE, "profile.json")]
@@ -242,6 +298,8 @@ def main(argv=None):
     for w in an.warnings:
         print("[warn] " + w, file=sys.stderr)
     generate(prog, an, a.out, a.comments)
+    if a.bundle_data:
+        bundle_data(a.exe, a.out)
     write_manifest(prog, an, a.manifest)
     print("[recomp] done in %.1fs" % (time.time() - t0))
     return 0

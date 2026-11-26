@@ -5,9 +5,11 @@
 ##   C start-up 13F3:0007 (the native re-creation of the PLINK86 start-up
 ##   comes first).
 ## * Native PLINK86 overlay manager: ovl_ensure(n) makes overlay n and its
-##   parents resident the way 191F:0288 does (same DOS calls on NFL.EXE, same
-##   bookkeeping in the overlay table and in the manager's data segment), so
-##   memory and DOS state match the original program.
+##   parents resident the way 191F:0288 does (same DOS calls on the program
+##   file, same bookkeeping in the overlay table and in the manager's data
+##   segment), so memory and DOS state match the original program.  The
+##   program file is the read-only virtual file DOS.install_program() sets up
+##   from res://recomp/program.bin: no NFL.EXE is needed at run time.
 ## * ROM services: INT n instructions and the C runtime's int86() (which IRETs
 ##   into the IVT) reach the F000 stubs; those run the BIOS/DOS services of
 ##   bios.gd / dos.gd natively and then perform the stub's IRET.
@@ -58,6 +60,10 @@ func setup(p_machine: Machine, p_bios: BIOS, p_dos: DOS, index, loader: Callable
 	bios = p_bios
 	dos = p_dos
 	load_seg = index.LOAD_SEG
+	if str(dos.load_info.get("sha1", "")) != index.PROGRAM_SHA1:
+		error_msg = "program.bin does not match the recompiled scripts (run recompile.py again)"
+		m.log_msg("[recomp] FATAL: " + error_msg)
+		m.abort = true
 	entry_unit = index.ENTRY_UNIT
 	entry_func = index.ENTRY_FUNC
 	for name in index.UNITS:
@@ -83,7 +89,7 @@ func setup(p_machine: Machine, p_bios: BIOS, p_dos: DOS, index, loader: Callable
 
 ## Program thread body: start-up, then the C start-up code.  Returns the exit code.
 func run() -> int:
-	if not startup():
+	if error_msg != "" or not startup():
 		finished = true
 		return -1
 	var u = units[entry_unit]
@@ -296,7 +302,8 @@ func _clear_overlaps(n: int) -> void:
 		i += 1
 
 
-## 191F:01C2: read overlay n from NFL.EXE and apply its fixups.
+## 191F:01C2: read overlay n from the program file (virtual, see header) and
+## apply its fixups.
 func _load(n: int) -> bool:
 	var rec := _rec(n)
 	ovl_loads += 1

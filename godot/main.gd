@@ -1,9 +1,13 @@
 ## Front-end for the statically recompiled NFL Challenge.
 ##
-## * Finds the game files (res://dos_c, user://dos_c, --dos-root=<path> or a
-##   folder picked in the app) and shows instructions if NFL.EXE is missing.
-## * The program itself is GDScript generated ahead of time from the user's
-##   NFL.EXE by tools/recomp/recompile.py (res://recomp/, not committed).  It
+## * The program is GDScript generated ahead of time from the user's NFL.EXE by
+##   tools/recomp/recompile.py into res://recomp/ (not committed), together with
+##   the baked program image res://recomp/program.bin.  NFL.EXE itself is not
+##   needed at run time.  Shows instructions if res://recomp is missing.
+## * Finds the game's data files (A..Q, LEAGUE.NFL, the team folder): from
+##   --dos-root=<path>, user://dos_c, res://dos_c, res://recomp/game (written by
+##   `recompile.py --bundle-data`, for a standalone export) or a folder picked
+##   in the app.  None of them needs to contain NFL.EXE.  The program
 ##   runs on its own Thread (it blocks while it waits for a key, the way the DOS
 ##   program does) on the native host layer (res://host/).  This thread only
 ##   renders video memory, feeds keys and wakes the program thread; the BIOS
@@ -24,6 +28,8 @@ const SPEEDS := [1.0, 2.0, 4.0, 8.0, 0.0]   # 0 = turbo
 const TURBO_FACTOR := 32.0
 const MIX_RATE := 22050.0
 const RECOMP_DIR := "res://recomp"
+## A file every game folder has (data, not the program).
+const MARKER_FILE := "LEAGUE.NFL"
 
 ## Godot physical keycode -> PC/XT set-1 scancode.
 var scancodes: Dictionary = {}
@@ -55,7 +61,6 @@ var phase: float = 0.0
 var dos_root: String = ""
 var write_root: String = ""
 var team_dir: String = "89"
-var program: String = "NFL.EXE"
 var program_args: String = ""
 var speed_index: int = 0
 var paused: bool = false
@@ -89,8 +94,6 @@ func _parse_args() -> void:
 			program_args = a.substr(7)
 		elif a.begins_with("--team-dir="):
 			team_dir = a.substr(11)
-		elif a.begins_with("--program="):
-			program = a.substr(10)
 		elif a == "--turbo":
 			speed_index = SPEEDS.size() - 1
 		elif a == "--mute":
@@ -103,11 +106,12 @@ func _parse_args() -> void:
 			start_fullscreen = true
 
 
+## True if `dir` holds the game's data files (NFL.EXE is not needed).
 func _has_game(dir: String) -> bool:
 	if dir == "" or not DirAccess.dir_exists_absolute(dir):
 		return false
 	for f in DirAccess.get_files_at(dir):
-		if f.to_upper() == program.to_upper():
+		if f.to_upper() == MARKER_FILE:
 			return true
 	return false
 
@@ -119,33 +123,41 @@ func _pick_root() -> bool:
 	if _has_game("user://dos_c"):
 		dos_root = "user://dos_c"
 		return true
-	if _has_game("res://dos_c"):
-		dos_root = "res://dos_c"
-		# res:// is read-only in exported builds: overlay writes in user://dos_c
-		write_root = "user://dos_c"
-		DirAccess.make_dir_recursive_absolute(write_root)
-		return true
+	for ro in ["res://dos_c", RECOMP_DIR + "/game"]:
+		if _has_game(ro):
+			dos_root = ro
+			# res:// is read-only in exported builds: overlay writes in user://dos_c
+			write_root = "user://dos_c"
+			DirAccess.make_dir_recursive_absolute(write_root)
+			return true
 	return false
 
 
 func _start() -> void:
 	_stop()
+	if not ResourceLoader.exists(RECOMP_DIR + "/recomp_index.gd") \
+			or not FileAccess.file_exists(RECOMP_DIR + "/program.bin"):
+		_show_message(
+			"The recompiled program is missing.\n\n"
+			+ "Run the static recompiler once on your own NFL.EXE:\n\n"
+			+ "    python3 tools/recomp/recompile.py /path/to/NFL.EXE [--bundle-data]\n\n"
+			+ "It writes godot/recomp/ (generated from your copy, never committed).\n"
+			+ "After that NFL.EXE is not needed any more.")
+		return
 	if not _pick_root():
 		_show_message(
-			"Game files not found.\n\n"
-			+ "Copy your own NFL Challenge files (NFL.EXE, A..Q, LEAGUE.NFL, SEASON.COM,\n"
-			+ "and the team folder 89/) into the project folder  godot/dos_c/\n"
+			"Game data files not found.\n\n"
+			+ "Copy your own NFL Challenge files (A..Q, LEAGUE.NFL and the team folder 89/;\n"
+			+ "NFL.EXE is not needed) into the project folder  godot/dos_c/\n"
 			+ "(or into %s),\n" % ProjectSettings.globalize_path("user://dos_c")
+			+ "or recompile with  --bundle-data  to put them into res://recomp/game,\n"
 			+ "or start Godot with  -- --dos-root=/path/to/nfl\n"
 			+ "or press the \"Game folder...\" button above.\n\n"
 			+ "The files are not included: bring your own copy.")
 		return
-	if not ResourceLoader.exists(RECOMP_DIR + "/recomp_index.gd"):
-		_show_message(
-			"The recompiled program is missing.\n\n"
-			+ "Run the static recompiler once on your own NFL.EXE:\n\n"
-			+ "    python3 tools/recomp/recompile.py /path/to/NFL.EXE\n\n"
-			+ "It writes godot/recomp/ (generated from your copy, never committed).")
+	var blob := ProgramBlob.from_file(RECOMP_DIR + "/program.bin")
+	if blob.error != "":
+		_show_message("Cannot use %s/program.bin: %s" % [RECOMP_DIR, blob.error])
 		return
 	message.visible = false
 	machine = Machine.new()
@@ -166,16 +178,12 @@ func _start() -> void:
 			DirAccess.make_dir_recursive_absolute(team_write)
 		drives["D"] = [team, team_write]
 	dos = DOS.new(machine, bios, drives, "C", "user://printer.txt")
-	var info := dos.load_program("C:" + program, program_args)
+	var info := dos.install_program(blob, program_args)
 	if info.is_empty():
-		_show_message("Could not load %s from %s" % [program, dos_root])
+		_show_message("The recompiled program could not be set up (see the log).")
 		machine = null
 		return
-	if int(info.get("load_seg", 0)) != 0x122:
-		_show_message("%s is not the NFL.EXE the recompiled code was made from." % program)
-		machine = null
-		return
-	machine.log_msg("[load] %s from %s %s" % [program, dos_root, str(info)])
+	machine.log_msg("[load] %s (recompiled), data from %s %s" % [blob.file_name, dos_root, str(info)])
 	video = Video.new()
 	host = RecompHost.new()
 	load_error = ""
@@ -286,7 +294,7 @@ func _build_ui() -> void:
 	file_dialog = FileDialog.new()
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_DIR
-	file_dialog.title = "Choose the folder that contains NFL.EXE"
+	file_dialog.title = "Choose the folder with the game's data files (LEAGUE.NFL, A..Q, 89/)"
 	file_dialog.dir_selected.connect(_on_dir_selected)
 	add_child(file_dialog)
 	player = AudioStreamPlayer.new()

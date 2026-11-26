@@ -39,13 +39,14 @@ def main():
     mod = importlib.import_module("recomp_mod")
     work = os.path.join(ROOT, "build", "recomp", "thread-smoke")
     scripts.prepare_dir(a.game_dir, work, "boot")
+    print("[main] removed: %s" % lockstep.remove_exe(work))
     gm = mod.Machine()
     logs = []
     gm.log_msg = lambda s: logs.append(s)
     gm.speed = a.speed
     gb = mod.BIOS(gm, bytearray(FONT8), "", mod.BIOS.DEFAULT_EPOCH, 12 * 3600)
     gdos = mod.DOS(gm, gb, {d: [p, ""] for d, p in scripts.drives(work).items()}, "C")
-    gdos.load_program("C:NFL.EXE", "/i")
+    lockstep.install(mod, gdos, os.path.join(ROOT, "godot", "recomp"), "/i")
     host = mod.RecompHost()
 
     def program_thread():          # main.gd _program_thread()

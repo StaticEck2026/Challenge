@@ -38,8 +38,8 @@ def drives(work):
 
 def prepare_dir(game_dir, work, scenario):
     """Fresh writable copy of the game folder for one scenario run."""
-    if not game_dir or not os.path.exists(os.path.join(game_dir, "NFL.EXE")):
-        raise SystemExit("--game-dir must point at the folder with NFL.EXE")
+    if not game_dir or not any(n.upper() == "LEAGUE.NFL" for n in os.listdir(game_dir)):
+        raise SystemExit("--game-dir must point at the game folder (with LEAGUE.NFL)")
     if os.path.exists(work):
         shutil.rmtree(work)
     shutil.copytree(game_dir, work, ignore=shutil.ignore_patterns("*.whl"))

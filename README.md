@@ -12,7 +12,9 @@ the logic is the original program's, translated mechanically (see
 
 **No game files are included. Bring your own copy.** It goes in `godot/dos_c/`,
 which is gitignored. The recompiled code is derived from your copy and is
-written to `godot/recomp/`, which is also gitignored and never committed. See
+written to `godot/recomp/`, which is also gitignored and never committed.
+`NFL.EXE` is needed only once, as the recompiler's input. The running game uses
+only the recompiled code, the baked program image and the data files. See
 `godot/README.md`.
 
 ## Layout
@@ -34,14 +36,17 @@ Disassembly listings, screenshots and run directories are generated into
 
 ## Quick start
 
-**Godot:** copy the game into `godot/dos_c/` (team disk in a subfolder such as
-`89/`) and recompile it once:
+**Godot:** recompile your `NFL.EXE` once:
 
 ```sh
-python3 tools/recomp/recompile.py godot/dos_c/NFL.EXE     # writes godot/recomp/ (about 2 s)
+python3 tools/recomp/recompile.py /path/to/nfl/NFL.EXE --bundle-data   # writes godot/recomp/ (about 2 s)
 ```
 
-Then open `godot/` in the Godot 4.3+ editor and press Play. Game flags go
+This writes the generated scripts, `program.bin` (the baked program image) and
+`game/` (a copy of the data files). After that the game needs no `NFL.EXE`.
+Without `--bundle-data`, put the data files (`A`..`Q`, `LEAGUE.NFL`, `89/`)
+into `godot/dos_c/` or pick their folder in the app. Then open `godot/` in the
+Godot 4.3+ editor and press Play. Game flags go
 after `--`, for example `godot --path godot -- --args=/i`.
 
 **Python oracle (headless):**
@@ -75,6 +80,8 @@ python3 -I tools/disasm/disasm.py  $G/NFL.EXE                # listings -> build
     selection, roster load and 8,000 ticks of a game with instant replay, at
     541,803 service calls. The CGA video memory is identical at every one of
     the 4,137 ticks spent in graphics mode.
+  - These runs delete `NFL.EXE` and set the program up from the baked
+    `program.bin`.
   - Every `.gd` file passes `gdparse`, and `gdlint` with a relaxed config for
     the generated scripts. `godot/` contains no instruction interpreter.
 - **Not verified:** the project has **never been opened in a real Godot

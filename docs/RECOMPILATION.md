@@ -14,8 +14,52 @@ The generated code is derived from a copyrighted binary. It is written to
 translator, the host layer, the tests and these docs are in the repository.
 
 ```sh
-python3 tools/recomp/recompile.py /path/to/NFL.EXE        # -> godot/recomp/*.gd (about 2 s)
+python3 tools/recomp/recompile.py /path/to/NFL.EXE [--bundle-data]   # -> godot/recomp/ (about 2 s)
 ```
+
+`NFL.EXE` is needed only for this step. The game in Godot never opens it (see
+"No NFL.EXE at run time" below).
+
+## No NFL.EXE at run time
+
+Besides the scripts, the recompiler writes `godot/recomp/program.bin`, about
+300 KB, read by `godot/host/program_blob.gd`. It holds:
+
+* the MZ header values: CS:IP, SS:SP, minalloc, maxalloc and the relocation
+  count;
+* the root image, already relocated for load segment 0122h;
+* the overlay section of the file: each overlay's fixup table and image, as
+  stored in the EXE;
+* the program's file name;
+* the SHA-1 of the source EXE. It must equal `PROGRAM_SHA1` in
+  `recomp_index.gd`, otherwise `RecompHost.setup` stops with "program.bin
+  does not match the recompiled scripts".
+
+`DOS.install_program(blob, tail)` replaces the MZ loader. It builds the same
+MCBs, environment (`C:\NFL.EXE`), PSP, memory and registers as loading the
+EXE would, copying the pre-relocated image. It also registers the program's
+name as a **read-only virtual file**, served by `MemFile` from the overlay
+section at the original file offsets, so it exists on every drive and in
+every directory without a host file.
+
+The only code that opens the program file is the overlay manager: once, at
+start-up, to preload overlay 12, keeping the handle open. That is confirmed by
+the oracle's file log, which records one open of `nfl.EXE` per run, before
+`config.nfl`. The native manager therefore makes the same DOS calls as the
+original (open, seek, read in FFF0h chunks, read the fixup tables into
+`1906:000E`), and they are served from the virtual file. It applies the
+overlay fixups itself at load time, as PLINK86 does, instead of storing
+pre-relocated overlay images. The reason is that the DOS call sequence, the
+file handle and the fixup buffer must match the original for the lockstep
+test: the deterministic clock counts service calls, and `INT 1Ah` seeds the
+game's random numbers from that clock.
+
+`recompile.py --bundle-data` also copies the game's data files (everything in
+the EXE's folder and its subfolders except `.EXE`, `.COM` and `.BAT`) to
+`godot/recomp/game/`. `main.gd` uses it as a read-only drive root (writes go
+to `user://dos_c`) when no other data folder is found, so an export with the
+non-resource filter `recomp/*.bin, recomp/game/*` is fully standalone. Data
+folders are recognised by `LEAGUE.NFL`. None of them needs `NFL.EXE`.
 
 ## Pipeline
 
@@ -128,7 +172,8 @@ to an indirect jump. It is unused for v2.01.
 |------|------|
 | `cpu_state.gd` | `CpuState`: registers, flags and the 1 MB `PackedByteArray`. There is no decoder. |
 | `machine.gd` | ROM stubs, IVT and BDA set-up, I/O ports (CGA status toggle, speaker, PIT divisor), keyboard queue, the 18.2 Hz clock, and `service(n)`, the BIOS/DOS dispatcher with blocking waits. |
-| `bios.gd`, `dos.gd` | The services, unchanged from the interpreter port except for the keyboard entry `key_event(scancode)`. |
+| `bios.gd`, `dos.gd` | The services, unchanged from the interpreter port except for the keyboard entry `key_event(scancode)`, the program set-up from `program.bin` (`install_program`, which replaces the MZ loader) and virtual files. |
+| `program_blob.gd`, `mem_file.gd` | The `program.bin` reader and the in-memory read-only file behind the virtual `NFL.EXE`. |
 | `recomp_host.gd` | `RecompHost`: loads and links the units, re-creates the PLINK86 start-up natively, the native overlay manager, ROM-stub calls (`do_int` for `INT n`, `iret_to_rom` for `int86()`), `dispatch`, `poll`, and `fatal`. |
 | `recomp_unit.gd` | Base class of the generated scripts (`st`, `host`, `mem`, `par`). |
 | `video.gd`, `font_cp437.gd` | The CGA/text bitmap renderer and the font. |
@@ -136,7 +181,7 @@ to an indirect jump. It is unused for v2.01.
 **Overlay manager.** The manager's code at `191F` is not translated.
 `ovl_ensure(n)` follows `191F:0288`. It walks the parent chain and clears
 the *loaded* bit of overlapping overlays. It then loads overlay n with the
-same DOS calls on `nfl.EXE` as the original: open once (the handle stays
+same DOS calls on `nfl.EXE` (the virtual file) as the original: open once (the handle stays
 open), seek to the code, read in chunks of FFF0h bytes, seek back, read the
 fixups 32 at a time into `1906:000E`, and apply them. It does the same
 bookkeeping in the overlay table and in the manager's data segment, and
@@ -200,7 +245,7 @@ python3 -I tools/recomp/profile_oracle.py --export tools/recomp/profile.json bui
 python3 -I tools/recomp/recompile.py $G/NFL.EXE
 python3 -I tools/recomp/coverage.py build/recomp/profile_boot.json build/recomp/profile_season.json
 python3 -I tools/recomp/test_translate.py --count 3000 --length 20     # random snippets vs the oracle CPU
-python3 -I tools/recomp/lockstep.py --game-dir $G season                 # /s game, STATS.LOG
+python3 -I tools/recomp/lockstep.py --game-dir $G season                 # /s game, STATS.LOG (recompiled side: NFL.EXE deleted)
 python3 -I tools/recomp/lockstep.py --game-dir $G boot                   # config, teams, game, instant replay
 python3 -I tools/recomp/thread_smoke.py --game-dir $G
 (cd godot && gdlint main.gd text_screen.gd host/*.gd)
@@ -230,6 +275,11 @@ points. The harness compares:
 * the video memory at every tick in graphics mode (the instant-replay frames);
 * every file the program wrote, byte for byte.
 
+The recompiled side deletes `NFL.EXE` from its copy of the game folder and
+sets the program up from `godot/recomp/program.bin`, as `main.gd` does. It
+logs every open of the program file, all served by the virtual file. The
+oracle (`tools/refemu/`, unchanged) still loads the real EXE.
+
 The oracle trace is cached in `build/recomp/trace_*.pkl`. `--diff-at N` lists
 the memory ranges that differ at service call N. That is how start-up and
 overlay-manager differences were bisected.
@@ -256,7 +306,10 @@ Results are in `docs/EMULATION_NOTES.md` ("Static recompilation").
   segment, and writes to the F000 ROM area are not blocked. The program
   does neither.
 * One fixed binary: the translator applies relocations for load segment
-  0122h, and `main.gd` refuses to run if the DOS loader picks another one.
+  0122h, and `install_program` refuses to run if the DOS loader picks
+  another one.
+* Only `NFL.EXE` is recompiled. `SEASON.COM`, the `season.nfl` builder,
+  cannot run in the Godot build.
   The address-keyed hints and the profile are for v2.01 (8/8/89).
 * **Not run in Godot.** No Godot binary could be used here. GDScript-specific
   behaviour is checked only by `gdparse`/`gdlint` and by the transpiled run:

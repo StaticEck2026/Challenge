@@ -44,7 +44,26 @@ sys.path.insert(0, HERE)
 import scripts  # noqa: E402
 
 HOST_FILES = ["cpu_state.gd", "machine.gd", "bios.gd", "dos.gd", "video.gd", "font_cp437.gd",
-              "recomp_unit.gd", "recomp_host.gd"]
+              "program_blob.gd", "mem_file.gd", "recomp_unit.gd", "recomp_host.gd"]
+
+
+def remove_exe(work):
+    """The recompiled side runs without the program file: delete every NFL.EXE."""
+    gone = []
+    for dp, dn, fn in os.walk(work):
+        for f in fn:
+            if f.upper() == "NFL.EXE":
+                os.remove(os.path.join(dp, f))
+                gone.append(os.path.relpath(os.path.join(dp, f), work))
+    return gone
+
+
+def install(mod, gdos, recomp_dir, args):
+    """main.gd's start-up: the baked program image instead of NFL.EXE."""
+    blob = mod.ProgramBlob.from_file(os.path.join(recomp_dir, "program.bin"))
+    if blob.error:
+        raise SystemExit("program.bin: " + blob.error)
+    return gdos.install_program(blob, args)
 LOAD_SEG = 0x122
 MGR_CS = 0x191F + LOAD_SEG
 MEM_EVERY = 2000
@@ -272,6 +291,8 @@ def run_oracle(scenario, game_dir, k, max_services, log, snapshot=False):
     crcs["end"] = mem_crc(m.mem, STACK_SEG)
     snap = st.get("snap")
     files = collect_files(work)
+    from collections import Counter
+    log("[oracle] file operations: %s" % sorted(Counter((e[0], e[1]) for e in s.dos.file_log).items()))
     log("[oracle] %s: %d service calls, %d ticks, %d instructions, %.1fs (%.0f instr/s), exited=%s code=%s, actions %d/%d" % (
         scenario, len(trace), st["ticks"], cpu.executed, dt, cpu.executed / max(dt, 1e-9), m.exited,
         m.exit_code, ks.ai, len(ks.actions)))
@@ -310,7 +331,7 @@ def transpile(recomp_dir, log):
     return dst
 
 
-def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False):
+def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, recomp_dir=None):
     import importlib
     import gdrt
     from font_cp437 import FONT8
@@ -320,6 +341,7 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False):
     log("[recomp] module imported in %.1fs" % (time.time() - t0))
     work = os.path.join(ROOT, "build", "recomp", "ls-recomp-" + scenario)
     scripts.prepare_dir(game_dir, work, scenario)
+    log("[recomp] removed from the run directory: %s" % remove_exe(work))
     sc = scripts.SCENARIOS[scenario]
     gm = mod.Machine()
     logs = []
@@ -329,8 +351,8 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False):
     gb = mod.BIOS(gm, bytearray(FONT8), "", mod.BIOS.DEFAULT_EPOCH, 12 * 3600)
     dr = scripts.drives(work)
     gdos = mod.DOS(gm, gb, {d: [p, ""] for d, p in dr.items()}, "C")
-    info = gdos.load_program("C:NFL.EXE", sc["args"])
-    log("[recomp] loaded %s" % info)
+    info = install(mod, gdos, recomp_dir or os.path.join(ROOT, "godot", "recomp"), sc["args"])
+    log("[recomp] installed from program.bin: %s" % info)
     host = mod.RecompHost()
     idx = mod.recomp_index()
     host.setup(gm, gb, gdos, idx, gdrt.Callable(lambda name: getattr(mod, name)()))
@@ -400,7 +422,9 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False):
                error=err or host.error_msg, files=collect_files(work), when=ks.when_log, logs=logs,
                crc_end=mem_crc(cpu.mem, STACK_SEG), actions=(ks.ai, len(ks.actions)), host=host,
                misses=host.dispatch_misses, dispatched=host.calls_dispatched, ovl_loads=host.ovl_loads,
-               snap=state.get("snap"), frames=frames)
+               snap=state.get("snap"), frames=frames,
+               exe_opens=[e for e in gdos.file_log if "NFL.EXE" in str(e[1]).upper()])
+    log("[recomp] opens of the program file (served from program.bin): %s" % res["exe_opens"])
     log("[recomp] %s: %d service calls, %d ticks, %.1fs, exited=%s code=%s, actions %d/%d, %d dispatched calls, "
         "%d dispatch misses, %d overlay loads" % (
             scenario, state["n"], gm.ticks, dt, gm.exited, gm.exit_code, ks.ai, len(ks.actions),
@@ -425,7 +449,8 @@ def diff_at(a, n):
         print(msg, flush=True)
     ref = run_oracle(a.scenario, a.game_dir, a.polls_per_tick, n, log, snapshot=True)
     transpile(a.recomp_dir, log)
-    res = run_recomp(a.scenario, a.game_dir, a.polls_per_tick, None, log, n, snapshot=True)
+    res = run_recomp(a.scenario, a.game_dir, a.polls_per_tick, None, log, n, snapshot=True,
+                     recomp_dir=a.recomp_dir)
     m1, m2 = ref["snap"], res["snap"]
     ranges = []
     i = 0
@@ -475,7 +500,8 @@ def main():
             ref = run_oracle(a.scenario, a.game_dir, a.polls_per_tick, a.max_services, log)
             pickle.dump(ref, open(cache, "wb"))
     transpile(a.recomp_dir, log)
-    res = run_recomp(a.scenario, a.game_dir, a.polls_per_tick, ref, log, a.max_services)
+    res = run_recomp(a.scenario, a.game_dir, a.polls_per_tick, ref, log, a.max_services,
+                     recomp_dir=a.recomp_dir)
     ok = res["error"] is None or res["error"] == ""
     if res["error"]:
         log("[lockstep] FAIL: %s" % res["error"])

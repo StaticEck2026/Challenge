@@ -198,6 +198,8 @@ def _pba_method(b, name, a):
         return bytearray(b[a[0]:end])
     if name == "decode_u16":
         return b[a[0]] | (b[a[0] + 1] << 8)
+    if name == "decode_u32":
+        return int.from_bytes(b[a[0]:a[0] + 4], "little")
     if name == "is_empty":
         return len(b) == 0
     if name == "remove_at":

@@ -1,5 +1,6 @@
-## DOS 3.30 emulation (HLE): MZ/COM loader, PSP, MCB chain, INT 20h/21h/2Fh/33h.
-## One-to-one port of tools/refemu/dos.py.
+## DOS 3.30 services for the recompiled program: program set-up from the baked
+## image (install_program), PSP, MCB chain, INT 20h/21h/2Fh/33h.  Port of
+## tools/refemu/dos.py (whose MZ loader reads the EXE; this one never does).
 ##
 ## Drives map to host directories.  Each drive has a read directory and an
 ## optional write directory (e.g. res://dos_c read-only + user://dos_c
@@ -27,13 +28,14 @@ const DEVICES := ["CON", "NUL", "PRN", "AUX", "CLOCK$", "LPT1", "COM1"]
 
 
 class DOSFile:
-	var fp: FileAccess = null
+	## FileAccess, or MemFile for a virtual file (same calls)
+	var fp = null
 	var path: String = ""
 	var dev: String = ""
 	var drive: int = 2
 	var refs: int = 1
 
-	func _init(p_fp: FileAccess, p_path: String, p_dev: String = "", p_drive: int = 2) -> void:
+	func _init(p_fp, p_path: String, p_dev: String = "", p_drive: int = 2) -> void:
 		fp = p_fp
 		path = p_path
 		dev = p_dev
@@ -66,6 +68,9 @@ var load_info: Dictionary = {}
 var find_list: Array = []
 var find_pos: int = 0
 var fcbs: Dictionary = {}
+## Upper-case file name -> [data, origin, length]: read-only files that exist
+## on every drive and directory without a host file (the program's own EXE).
+var virtual_files: Dictionary = {}
 
 
 func _init(p_machine: Machine, p_bios: BIOS, p_drives: Dictionary, p_cur_drive: String = "C",
@@ -302,15 +307,15 @@ func parse_fcb_name(a: int, name: String) -> void:
 		m.wb(a + 9 + i, e[i])
 
 
-## Loads an MZ .EXE or a .COM program. Returns load_info (empty on failure).
-func load_program(dos_path: String, tail: String = "") -> Dictionary:
-	var host := resolve(dos_path)
-	if host == "" or host.begins_with("DEV:"):
-		return {}
-	var data := FileAccess.get_file_as_bytes(host)
-	if data.is_empty():
-		return {}
-	var full := full_dos_path(dos_path)
+## Loads the recompiled program from its baked image (ProgramBlob) exactly as
+## tools/refemu's load_program() loads the original EXE (same MCBs, environment, PSP,
+## memory and registers; the image is already relocated), and makes the
+## program's file name a virtual read-only file serving the overlay section,
+## so no EXE is needed on any drive.  Returns load_info (empty on failure).
+func install_program(blob: ProgramBlob, tail: String = "") -> Dictionary:
+	var name := blob.file_name.to_upper()
+	virtual_files[name] = [blob.overlays, blob.ovl_off, blob.exe_size]
+	var full := full_dos_path("C:" + name)
 	program_name = full
 	var env_paras := 0x10
 	mcb_write(FIRST_MCB, 0x4D, 0x0000, env_paras)
@@ -320,62 +325,33 @@ func load_program(dos_path: String, tail: String = "") -> Dictionary:
 	mcb_write(prog_mcb, 0x5A, p, MEM_TOP - p)
 	mcb_write(FIRST_MCB, 0x4D, p, env_paras)
 	psp = p
-	var sig := data.decode_u16(0)
-	if sig == 0x5A4D or sig == 0x4D5A:
-		var cblp := data.decode_u16(2)
-		var cp := data.decode_u16(4)
-		var crlc := data.decode_u16(6)
-		var cparhdr := data.decode_u16(8)
-		var minalloc := data.decode_u16(10)
-		var maxalloc := data.decode_u16(12)
-		var ss := data.decode_u16(14)
-		var sp := data.decode_u16(16)
-		var ipv := data.decode_u16(20)
-		var cs := data.decode_u16(22)
-		var lfarlc := data.decode_u16(24)
-		var img_end := cp * 512 - ((512 - cblp) if cblp else 0)
-		var hdr := cparhdr * 16
-		var image_size := img_end - hdr
-		var load_seg := p + 0x10
-		var need := (image_size + 15) / 16 + minalloc + 0x10
-		var avail := MEM_TOP - p
-		var max_need := (image_size + 15) / 16 + maxalloc + 0x10 if maxalloc else need
-		var want := mini(avail, maxi(need, max_need))
-		mcb_write(prog_mcb, 0x5A, p, avail)
-		if want < avail:
-			resize(p, want)
-		var a := load_seg << 4
-		for i in range(image_size):
-			cpu.mem[a + i] = data[hdr + i]
-		for i in range(crlc):
-			var off := data.decode_u16(lfarlc + i * 4)
-			var seg := data.decode_u16(lfarlc + i * 4 + 2)
-			var la := ((load_seg + seg) << 4) + off
-			var v := (cpu.mem[la] | (cpu.mem[la + 1] << 8)) + load_seg
-			cpu.mem[la] = v & 0xFF
-			cpu.mem[la + 1] = (v >> 8) & 0xFF
-		build_psp(p, ENV_SEG, tail, MEM_TOP)
-		cpu.sr[0] = p
-		cpu.sr[3] = p
-		cpu.sr[2] = (ss + load_seg) & 0xFFFF
-		cpu.r[4] = sp
-		cpu.sr[1] = (cs + load_seg) & 0xFFFF
-		cpu.ip = ipv
-		load_info = {"psp": p, "load_seg": load_seg, "image_size": image_size, "relocs": crlc,
-			"cs": cs, "ip": ipv, "ss": ss, "sp": sp, "minalloc": minalloc, "maxalloc": maxalloc,
-			"overlay_bytes": data.size() - img_end}
-	else:
-		mcb_write(prog_mcb, 0x5A, p, MEM_TOP - p)
-		build_psp(p, ENV_SEG, tail, MEM_TOP)
-		var a := (p << 4) + 0x100
-		for i in range(data.size()):
-			cpu.mem[a + i] = data[i]
-		for i in range(4):
-			cpu.sr[i] = p
-		cpu.ip = 0x100
-		cpu.r[4] = 0xFFFE
-		m.ww((p << 4) + 0xFFFE, 0)
-		load_info = {"psp": p, "com_size": data.size()}
+	var load_seg := p + 0x10
+	if load_seg != blob.load_seg:
+		m.log_msg("[dos] program image is relocated for %04X, loader picked %04X"
+			% [blob.load_seg, load_seg])
+		return {}
+	var image_size := blob.image.size()
+	var need := (image_size + 15) / 16 + blob.minalloc + 0x10
+	var avail := MEM_TOP - p
+	var max_need := (image_size + 15) / 16 + blob.maxalloc + 0x10 if blob.maxalloc else need
+	var want := mini(avail, maxi(need, max_need))
+	mcb_write(prog_mcb, 0x5A, p, avail)
+	if want < avail:
+		resize(p, want)
+	var a := load_seg << 4
+	for i in range(image_size):
+		cpu.mem[a + i] = blob.image[i]
+	build_psp(p, ENV_SEG, tail, MEM_TOP)
+	cpu.sr[0] = p
+	cpu.sr[3] = p
+	cpu.sr[2] = (blob.ss + load_seg) & 0xFFFF
+	cpu.r[4] = blob.sp
+	cpu.sr[1] = (blob.cs + load_seg) & 0xFFFF
+	cpu.ip = blob.ip
+	load_info = {"psp": p, "load_seg": load_seg, "image_size": image_size, "relocs": blob.relocs,
+		"cs": blob.cs, "ip": blob.ip, "ss": blob.ss, "sp": blob.sp, "minalloc": blob.minalloc,
+		"maxalloc": blob.maxalloc, "overlay_bytes": blob.exe_size - blob.ovl_off,
+		"sha1": blob.sha1}
 	dta = [p, 0x80]
 	cpu.r[0] = 0
 	cpu.r[3] = 0
@@ -386,6 +362,22 @@ func load_program(dos_path: String, tail: String = "") -> Dictionary:
 	cpu.r[5] = 0x91C
 	cpu.iflag = 1
 	return load_info
+
+
+## Virtual file entry for a DOS name (any drive/directory), or [].
+func virtual_file(name: String) -> Array:
+	if virtual_files.is_empty():
+		return []
+	var base := name.replace("/", "\\")
+	var k := base.rfind("\\")
+	if k >= 0:
+		base = base.substr(k + 1)
+	if base.length() >= 2 and base[1] == ":":
+		base = base.substr(2)
+	base = base.to_upper()
+	if virtual_files.has(base):
+		return virtual_files[base]
+	return []
 
 
 # ------------------------------------------------------------- file names
@@ -1018,6 +1010,13 @@ func create_file(ah: int) -> int:
 
 func open_file(al: int) -> int:
 	var name := read_asciiz(cpu.sr[3], cpu.r[2])
+	var vf := virtual_file(name)
+	if not vf.is_empty():
+		if (al & 3) != 0:
+			return err(ERR_ACCESS)
+		file_log.append(["open", name, "virtual:" + name])
+		var hv := alloc_handle(DOSFile.new(MemFile.new(vf[0], vf[1], vf[2]), name, "", drive_num(name)))
+		return ok(hv) if hv >= 0 else err(ERR_TOOMANY)
 	var host := resolve(name)
 	if host == "":
 		file_log.append(["open-fail", name, ""])
