@@ -114,7 +114,7 @@ func setup(scenario: String, data_root: String, recomp_dir: String, p_out: Strin
 func _write(path: String, text: String) -> void:
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f != null:
-		f.store_buffer(text.to_ascii_buffer())
+		f.store_buffer(text.to_utf8_buffer())
 		f.close()
 
 

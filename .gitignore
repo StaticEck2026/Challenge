@@ -17,3 +17,6 @@ godot/.import/
 
 # Statically recompiled game code: derived from your own NFL.EXE, never commit
 godot/recomp/
+
+# Personal Claude Code settings
+.claude/settings.local.json
