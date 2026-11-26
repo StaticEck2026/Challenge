@@ -13,7 +13,10 @@ DGROUP; <name>.json the tick and the screen text.  Nothing here is committed
 Scenarios: boot (CPU vs CPU with instant replay: setup screens, field,
 plays, replay), human (a human coach on the right keypad), full (a whole game
 at extra-extra-fast speed: half-time and final statistics, injuries, the
-"Another Game" prompt), alt (Dolphins at Bills: team colours that do not
+"Another Game" prompt), humanplay (the Bills coached by a "human" on the right
+keypad, driven with the keypad keys: kick, play-selection and fourth-down
+windows, the W key's play-windows prompt; verifies that a play called with
+those keys runs), alt (Dolphins at Bills: team colours that do not
 clash).
 """
 import argparse
@@ -171,13 +174,10 @@ def scenario_full(game_dir, log):
         ("40_halftime_stats", has("TEAM STATISTICS"), 4, "{PgDn}"),
         ("40b_stats_rushing", has("- Rushing"), 4, "{PgDn}"),
         ("40c_stats_passing", has("- Passing"), 4, "{PgDn}{PgDn}{PgDn}"),
-        ("40d_stats_sacks", has("- Sacks"), 4, "{Alt-S}"),
-        ("40e_save_game", has("aved game"), 4),
+        ("40d_stats_sacks", has("- Sacks"), 4, "{Enter}"),
         ("41_injury", has("SHAKEN"), 2),
         ("42_final_stats", later(has("TEAM STATISTICS"), 40), 4),
-        ("43_another_game", has("Another Game"), 2, "n"),
-        ("44_new_teams", has("pick new teams"), 2, "n"),
-        ("45_exit_menu", has("to exit NFL Challenge"), 2),
+        ("43_another_game", has("Another Game"), 2),
     ]
     r = harness.Run(game_dir, "cap-full", "", keys, max_ticks=13500, log=log)
     plan = Plan(pts, log)
@@ -205,7 +205,102 @@ def scenario_alt(game_dir, log):
     return plan.i, len(pts)
 
 
-SCENARIOS = {"boot": scenario_boot, "human": scenario_human, "full": scenario_full, "alt": scenario_alt}
+class HumanBot:
+    """Plays the Bills as a human coach on the right keypad, the way a player
+    would with the Modern view's buttons: whenever one of his windows (right
+    side, numbered entries) has been on screen for a moment, it presses an
+    entry with the same keys main.gd injects for "pad:R:<d>" (Shift + numeric
+    keypad, which the BIOS turns into the keypad digit), and captures each
+    kind of window once.  It also verifies that the offensive play called
+    through those keys is the one the game runs."""
+
+    PAD = {1: 0x4F, 2: 0x50, 3: 0x51, 4: 0x4B, 5: 0x4C, 6: 0x4D, 7: 0x47, 8: 0x48, 9: 0x49, 0: 0x52}
+    KINDS = [("Normal kick", "60_human_kick_menu", 1), ("Short yardage", "61_human_defense_groups", 2),
+             ("Five Under", "62_human_defense_plays", 3), ("White group", "63_human_offense_groups", 1),
+             ("QB Sneak", "64_human_offense_plays", 5), ("Go for it", "65_human_fourth_down", 2),
+             ("to accept", "66_human_penalty", 1)]
+
+    def __init__(self, ui, log, want):
+        self.ui = ui
+        self.log = log
+        self.want = want
+        self.last = None
+        self.since = 0
+        self.got = set()
+        self.called = None
+        self.verified = None
+        self.wstate = None
+
+    def pad(self, r, d):
+        k = self.PAD[d]
+        r.gm.kbd_queue.extend([0x2A, k, k | 0x80, 0xAA])
+
+    def on_tick(self, r):
+        if not r.script_done() or r.mem[0x449] != 3:
+            return
+        t = r.text()
+        if self.called and self.verified is None:
+            for line in t.split("\n")[19:24]:
+                if " vs " in line:
+                    self.verified = line.strip().startswith(self.called)
+                    self.log("[capture] human play called with the keypad: %r -> game ran %r: %s"
+                             % (self.called, line.strip(), "OK" if self.verified else "MISMATCH"))
+        body = "\n".join(t.split("\n")[3:])
+        if body != self.last:
+            self.last, self.since = body, 0
+            return
+        self.since += 1
+        if self.since != 12 or r.gm.kbd_queue:
+            return
+        rows = t.split("\n")
+        if self.wstate == "sent" and "Show play windows" in t:
+            # the W key's prompt, then L (left windows off) and Enter to close
+            save(r, "67_play_windows_prompt", self.log)
+            r.gm.kbd_queue.extend([0x26, 0xA6, 0x1C, 0x9C])
+            self.wstate = "done"
+            return
+        for b in self.ui.Screens.find_boxes(rows):
+            if int(b["left"]) < 40 or int(b["right"]) - int(b["left"]) >= 60:
+                continue
+            opts = self.ui.Screens.numbered(b["lines"])
+            if not opts:
+                continue
+            text = " ".join(o[1] for o in opts)
+            choice = 1
+            for marker, name, d in self.KINDS:
+                if marker in text:
+                    choice = d
+                    if name not in self.got:
+                        self.got.add(name)
+                        save(r, name, self.log)
+                    if name == "64_human_offense_plays" and self.called is None:
+                        self.called = dict(opts).get(str(choice), "").rstrip("\u2022").strip() or None
+            if self.wstate is None:
+                self.wstate = "sent"
+                r.gm.kbd_queue.extend([0x11, 0x91])      # W: "Show play windows (L,R)"
+                return
+            self.pad(r, choice)
+            if len(self.got) >= self.want:
+                r.stop()
+            return
+
+
+def scenario_humanplay(game_dir, log):
+    import uimod
+    ui = uimod.load(log)
+    keys = (scripts.CONFIG_KEYS + "{when:home team}{Enter}{when:visiting team}{Down}{Enter}"
+            "{when:Choose the coach}h{when:Right keypad}r{when:coach for the Colts}c"
+            "{when:Timeouts}{when:Start game}{wait:20}{Shift-PgDn}")
+    r = harness.Run(game_dir, "cap-humanplay", "", keys, max_ticks=26000, log=log)
+    bot = HumanBot(ui, log, 7)
+    r.on_tick = bot.on_tick
+    r.run()
+    log("[capture] human windows captured: %s" % sorted(bot.got))
+    return len(bot.got) + (1 if bot.verified else 0) + (1 if bot.wstate == "done" else 0), 9
+
+
+SCENARIOS = {"boot": scenario_boot, "human": scenario_human, "full": scenario_full, "alt": scenario_alt,
+             "humanplay": scenario_humanplay}
 
 
 def main():

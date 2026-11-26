@@ -25,12 +25,15 @@ Checks:
 --with-ui also runs the Modern view's layer (godot/ui: GameState.update() and
 Screens.build() on the program's memory, translated by gd2py --ui) on every
 BIOS tick of the recompiled side, the way main.gd runs it every frame, to
-show that it is passive: the run must still match the oracle exactly.
+show that it is passive: the run must still match the oracle exactly.  It
+cycles through both field orientations with and without the auto-framing
+zoom camera (eased and contained like modern_view.gd).
 
 The oracle trace of a scenario is cached in build/recomp/trace_<scenario>.pkl.
 """
 import argparse
 import hashlib
+import math
 import os
 import pickle
 import subprocess
@@ -390,13 +393,30 @@ def ui_layer(log):
     gs = ui.GameState()
     screens = ui.Screens(ui.UiArt())
     dl = ui.DrawList()
-    stats = {"frames": 0, "screens": {}}
+    stats = {"frames": 0, "screens": {}, "zoomed": 0}
+    cams = {}
+    mv = screens.match_view
+    rate = 1.0 - math.exp(-(1.0 / 18.2) * ui.MatchView.CAMERA_RATE)
 
     def hook(mem):
         gs.update(mem)
-        # both field orientations, alternating
-        field = "vertical" if stats["frames"] % 2 else "horizontal"
-        sid = screens.build(dl, gs, {"view_label": "Modern", "speed_label": "1x", "field": field})
+        # both field orientations, with and without the auto-framing zoom
+        # camera (eased and contained the way modern_view.gd does it)
+        n = stats["frames"]
+        field = "vertical" if n % 2 else "horizontal"
+        u = {"view_label": "Modern", "speed_label": "1x", "field": field, "zoom": bool(n // 2 % 2)}
+        if u["zoom"] and gs.play_active:
+            mv.vertical = field == "vertical"
+            pts = ui.MatchView.framed_points(gs, u)
+            target = mv.frame_camera(pts)
+            cam = cams.get(field)
+            cam = list(target) if cam is None else [c + (t - c) * rate for c, t in zip(cam, target)]
+            cams[field] = cam = list(mv.contain_camera(cam, pts))
+            u["camera"] = cam
+            stats["zoomed"] += 1
+        elif not gs.play_active:
+            cams.clear()
+        sid = screens.build(dl, gs, u)
         stats["frames"] += 1
         stats["screens"][sid] = stats["screens"].get(sid, 0) + 1
     return hook, stats
@@ -514,7 +534,8 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, re
                exe_opens=[e for e in gdos.file_log if "NFL.EXE" in str(e[1]).upper()])
     log("[recomp] opens of the program file (served from program.bin): %s" % res["exe_opens"])
     if ui_stats is not None:
-        log("[ui] Modern layer ran on %d ticks: %s" % (ui_stats["frames"], ui_stats["screens"]))
+        log("[ui] Modern layer ran on %d ticks (%d with the zoom camera framing a play): %s"
+            % (ui_stats["frames"], ui_stats["zoomed"], ui_stats["screens"]))
     log("[recomp] %s: %d service calls, %d ticks, %.1fs, exited=%s code=%s, actions %d/%d, %d dispatched calls, "
         "%d dispatch misses, %d overlay loads, %d timer interrupts, max nesting %d recompiled functions" % (
             scenario, state["n"], gm.ticks, dt, gm.exited, gm.exit_code, ks.ai, len(ks.actions),

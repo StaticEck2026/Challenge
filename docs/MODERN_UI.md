@@ -16,7 +16,8 @@ variables listed in `godot/ui/state_map.json`) and draws it. It never writes
 memory, never calls into the program and does not change timing or the order
 of service calls (proved by the lockstep test, below). Its buttons only inject
 the key the screen asks for ("Press R for Right keypad" becomes an **R** button
-that sends the R scancode, exactly like the key).
+that sends the R scancode, exactly like the key; a human coach's play list
+sends that coach's own keys, see "Coach keys").
 
 ## Files
 
@@ -57,15 +58,21 @@ screenshot key. The program thread is unchanged.
   (possession left, play text and line-up right). Yard numbers turn a quarter
   with their bottoms towards the nearer sideline, end-zone names are upright,
   disc numbers always stay upright.
-* **Zoom camera** (both orientations, plays only). It enlarges the field up to
-  1.8x the horizontal full-field scale while the whole width of the field
-  (sideline to sideline plus 1.5 yd) stays visible, and follows the ball only
-  along the field's length. Vertical zoom uses most of the screen width
-  (about 31 px per yard, roughly 29 yards of length in view) with the
-  horizontal view's chrome: the pill at the top centre, the strip at the
-  bottom, the ball kept in the middle of the space under the pill. In the
-  horizontal orientation the width constraint leaves little room: the zoom
-  is about 1.1x.
+* **Zoom camera** (toolbar *Zoom*, both orientations, plays only). An
+  auto-framing camera: its target is the largest scale at which all 22
+  players and the ball fit, with 3 yards of margin, in the area under the
+  toolbar and the scoreboard pill and above the info strip
+  (`MatchView.frame_area()`; the pill's height is kept free), capped at 2.2x
+  the full-field scale and centred on that group (`frame_camera()`). The
+  view eases towards the target with exponential smoothing (rate 2.5/s,
+  `1 - exp(-2.5 dt)` per frame: no overshoot, no jitter from frame-rate
+  changes), then `contain_camera()` corrects the eased camera so nobody is
+  outside: the scale is never larger than the target allows and the centre
+  moves just enough to bring every disc in. So the cap gives way only when
+  the players spread out, down to the full field at most (a kick-off). The
+  camera starts on the target at the first frame of a play and resets
+  between plays. While zoomed the pill is compact (72 %) and translucent;
+  discs never sit under it because its area is not part of the frame.
 * **Field.** Horizontal, the whole 120 yards filling the 16:9 frame: mown
   stripes every 5 yards, yard lines, one-yard hash marks along the sidelines
   and on two inbound rows (placed where the game's own graphics field puts
@@ -84,6 +91,13 @@ screenshot key. The program thread is unchanged.
   numbers at
   the line stay readable; drawing order is defence, offence, ball carrier.
   The game's positions are not changed (the position check uses them).
+  When the game switches to graphics for a play it first draws the field
+  with the old records still in memory (about 1.3 s at 1x), then computes
+  the line-up one player at a time; a record is shown only once the game has
+  written it in this graphics session (its position differs from the one it
+  had in text mode; `GameState` "placed"), so no stale disc flashes up. A
+  player far out of bounds, beyond the margin the full field shows, is
+  pinned to the edge of the view instead of leaving it.
 * **Team colours** (`UiTheme.kit_colors`). End zones and their names,
   scoreboard blocks, the strip's team block, match-up cards and statistics
   pills always use each team's own primary colour. Only the player discs
@@ -109,9 +123,9 @@ screenshot key. The program thread is unchanged.
   to the play's result before showing the play; reading them directly would
   give the result away).
 * **Toolbar** (slim, dark, top): View, Speed, Pause/Resume, Sound, Screenshot,
-  field orientation (Horizontal/Vertical), Zoom (a camera option for plays that follows the ball at 1.8x; the default
-  is the full field), More (shows the HD/Classic toolbar with Reset, Game
-  folder and Colors), Fullscreen.
+  field orientation (Horizontal/Vertical), Zoom (the auto-framing camera
+  for plays; the default is the full field), More (shows the HD/Classic
+  toolbar with Reset, Game folder and Colors), Fullscreen.
 * **Info strip** (dark, bottom): the team with the ball and its time-outs,
   the play call and result text the game prints under its field ("HB Option
   Weak vs 30 Double Zone", "Run... Gained 1 yard. Carried by #20, RB ..."),
@@ -120,11 +134,16 @@ screenshot key. The program thread is unchanged.
   and NFC rows of division cards, the game's cursor highlighted), match setup
   (two team cards with coach and keypad, the prompt with key buttons, the coin
   toss), title and loading, the field overview with the game's windows as side
-  panels (play lists, substitution groups, coach menu, kick and penalty menus;
-  numbered entries become buttons), roster tables, notices under the field
-  (injuries, with the game's block-letter caption as a badge), y/n questions
-  as Yes/No buttons, and team statistics (section cards with comparison
-  bars, PgUp/PgDn/Continue buttons).
+  panels (play lists, substitution groups, coach menu, kick, fourth-down and
+  penalty menus; numbered entries become buttons that send the coach's keys,
+  and a human coach's panel is tagged *F-keys* or *Keypad*), roster tables,
+  notices (injuries, with the game's block-letter caption as a badge; the
+  penalty description), y/n questions as Yes/No buttons, the W key's "Show
+  play windows (L,R)" prompt as Left/Right toggles and Done, team statistics
+  (section cards with comparison bars) and the per-player pages behind PgDn
+  (Rushing, Passing, Receiving, ..., Sacks: two team cards with the game's
+  column headers, one row per player and the totals), with
+  PgUp/PgDn/Continue buttons.
 
 ## Game-state address map and evidence
 
@@ -156,6 +175,8 @@ the recompiled run (`tools/modern/research.py`), "check" verified by
 | `516C`, `547A` | rosters: 49 records of 15 bytes (byte 0 jersey, byte 1 position code; the names OL C TE WR RB QB DL LB DB P K are at `090C`) | code: `0031:0C9E` returns `516A` / `5478` per team; diff against the team file | high |
 | `546D`, `577B` | roster indexes of each team's 11 players on the field, in play-record order | diff: holds the formation's starters; check: C on the ball, QB behind him, "Carried by #20" is the disc with the ball | medium |
 | `A494` | the graphics play: 23 records of (x, y, k) words; 0-10 offence (drawn as O), 11-21 defence (X), 22 the ball; CGA pixels of the sprite's top-left corner on the scrolled field | diff: equal to the X/O recognised in CGA memory at every frame; check | high |
+| `83CB`, `83CD` | home coach (1 human, 2 computer), home coach's keyboard side (1 right = numeric keypad, -1 left = F-keys) | code: the save game writes them with the names under "Coach, Keypad, Team" (`12CA:0164`); diff; check: the human-coach captures | high |
+| `83FC`, `83FE` | visitor coach, keyboard side | code: save game (`12CA:018C`); diff | high |
 | `8753`, `8755` | horizontal and vertical field scroll (`field_x = x - cam_x`, `field_y = y + cam_y`; fraction bytes at `8752`/`8754`) | diff: change exactly when the drawn yard lines scroll; check | high |
 
 Field geometry of the game's graphics view, measured from the lines it draws:
@@ -174,10 +195,13 @@ draws it).
 
 ## Screens covered
 
-Driven through the recompiled program in four scripted runs (CPU vs CPU
+Driven through the recompiled program in five scripted runs (CPU vs CPU
 with instant replay, Colts at Bills and Dolphins at Bills; a human coach on
-the right keypad; a whole game at extra-extra-fast speed to the "Another
-Game" question):
+the right keypad up to his menu; a whole game at extra-extra-fast speed to
+the "Another Game" question, paging through the statistics; and
+`humanplay`: the Bills coached by a "human" on the right keypad for a
+quarter, every choice made with the same keys the Modern view's buttons
+inject):
 
 | Screen | Modern layout | Preview |
 |--------|---------------|---------|
@@ -191,15 +215,65 @@ Game" question):
 | Plays and instant replay (CGA mode 4) | field with 22 discs and the ball | `13`-`16`, `18`-`20`, `14_play_mid_zoom` |
 | Injury report, substitution roster | notice card with badge, roster table panel | `41` |
 | Half-time and final team statistics | section cards with comparison bars, PgUp/PgDn/Continue | `40`, `42` |
-| "Another Game (y/n)?", "Do you wish to pick new teams (y/n)?" | Yes/No buttons | `43` |
-| Anything else (additional statistics pages, save-game and option menus, messages not seen in the runs) | the original text (HD renderer) inside a modern frame | - |
+| Per-player statistics behind PgDn (Rushing, Passing, ..., Sacks) | two team cards with column headers, player rows, totals; PgUp/PgDn/Continue | `40b`-`40d` |
+| "Another Game (y/n)?" (and any other "(y/n)" question under the field: "Exit (y/n)?", "New game (y/n)?", "Do you wish to pick new teams (y/n)?") | Yes/No buttons | `43` |
+| Human coach: kick-off menu (Normal / Onside / Squib) | side panel, keypad buttons, *Keypad* tag | `60` |
+| Human coach: defence formations and plays, offence groups and plays | side panels with the coach's keys (F1-F10 left, keypad digits right) | `61`-`64` |
+| Human coach: fourth down (Go for it / Punt / Field goal) | side panel with keypad buttons | `65` |
+| Penalty: the description and "1 to accept / 2 to decline" | notice card over the field and a side panel with buttons | `66` |
+| W: "Show play windows (L,R): LEFT On RIGHT On" | card with Left/Right toggle buttons (lit when On) and Done (Enter) | `67` |
+| Anything else (the save-game and exit screens, messages not seen in the runs) | the original text (HD renderer) inside a modern frame | - |
 
 Not reached in the scripted runs and therefore only covered by the fallback:
-the additional statistics pages (PgDn), the save-game and exit menus, the
-options menus of overlay 4, penalty and fourth-down menus (they are windows
-over the field, so they get side panels when they appear), and the human
-coach's play selection: the keypad mapping of the human coach was not found,
-so the scripted human game stops at the coach menu.
+the save-game screens ("SAVE GAME", "Checking for room to save game...";
+Alt+S, S and Ctrl+S at the half-time statistics of a CPU-vs-CPU game did
+nothing) and the exit screen ("Press ... X ...to exit NFL Challenge":
+answering N to "Another Game (y/n)?" ends the program directly). Their y/n
+questions get Yes/No buttons when they appear under the field; the rest
+shows as text in the modern frame. The toggles behind the Alt keys
+("Enter Graphics mode", "Sound off", ...) are one-line messages printed in
+the play-text rows, which the info strip shows as they are.
+
+## Coach keys
+
+The game reads the two coaches from the two halves of the keyboard: a coach
+on the **left keypad** answers with the function keys (entry 1 = F1 ...
+entry 10 = F10, scan codes `3B`-`44`), a coach on the **right keypad** with
+the numeric keypad producing digits (entry 1-9 = keypad 1-9, entry 10 =
+keypad 0; scan codes `4F 50 51 4B 4C 4D 47 48 49 52` with the ASCII digit,
+which the BIOS gives with NumLock on, or with Shift when it is off). The
+plain digit keys are ignored in these menus. Which coach is human and on
+which side is in memory (`83CB`/`83CD` home, `83FC`/`83FE` visitor; see the
+address map).
+
+A numbered entry in a play-calling window becomes a hotspot
+`pad:<L|R>:<digit>`: the side is that of the team named in the window title
+(or, for an untitled window, the screen side it is on), and the badge shows
+the key (`F3` or `3`). `main.gd` (`_press_coach_key`) turns it into F1-F10,
+or into the keypad scan code, plain when the program's NumLock (BIOS flag
+`0417h` bit 5) is on and wrapped in Shift when it is off. When the player
+uses the real numeric keypad, `main.gd` (`_sync_numlock`) first toggles the
+program's NumLock to match the host's, so keypad keys arrive as digits
+either way.
+
+Verified in the `humanplay` capture: the bot plays the Bills (human, right
+keypad) only through those injected keys, through the kick-off, defence,
+offence, fourth-down and penalty menus, and checks that the play it called
+is the one the game runs: entry 5 of the White group, "YZ Cross", was
+followed by the game's own "YZ Cross vs 30 Double Zone".
+
+## Players during plays and `/i`
+
+Without `/i` the game still switches to the CGA field for every play and
+draws the players (its graphics option is on by default), so the
+Modern view shows the 22 moving discs for every play by default. `/i` only
+adds the instant replay after the play (the view shows it the same way), so
+the project does not need to pass it by default. Two settings make the game
+skip the graphics: its "Exit graphics mode" toggle, and extra-extra-fast
+mode (Alt+E),
+in which the game does not compute play positions at all. Then the view
+shows the field overview with the moving ball marker and the play text,
+which is all the game has.
 
 ## Verification without Godot
 
@@ -241,29 +315,58 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   each snap the ball must be within a yard of the line of scrimmage the text
   scoreboard showed before the play.
 
-  Result (`--ticks 12000 --fast`: a normal-speed CPU game with instant replay
-  and an extra-extra-fast one, 5,654 graphics frames, plays and replays):
-  62,529 isolated player positions, **all 62,529 at exactly the pixel where
-  the game drew the sprite**; 0 of 5,654 frames with a yard line off a 5-yard
-  multiple; 9 of 9 snaps within a yard of the scoreboard's line of
-  scrimmage. Counting overlapping sprites too, 79.5 % of 111,255 positions
-  match a recognisable sprite within 2 px (the rest are shapes destroyed by
-  XOR overlap). The display-only declutter moved a disc by at most 0.45 yd
-  (its cap). Visibility of the 22 discs in the view's own layout, over the
-  same frames: 0 off-screen across the field's width in all four layouts
-  (horizontal or vertical, full field or zoom), 0 off-screen at all on the
-  full field; with the vertical zoom 10,886 of 124,388 disc positions (8.7 %)
-  are beyond the camera along the field's length (deep players on long
-  plays; the camera follows the ball), and disc centres under the scoreboard
-  pill number 1,024 (horizontal zoom) and 1,190 (vertical zoom). PASS.
+  The host's deterministic clock now also ticks on loop back-edges, so a
+  tick can fall while the game is still writing records or redrawing its
+  XOR sprites. The pixel and yard-line comparisons therefore use settled
+  frames only (records and CGA memory unchanged since the previous tick).
+  During a sideways scroll the game moves the scroll variable and redraws
+  the sprites shifted by that step before it writes the next records; a
+  sprite found exactly there counts as matched and is reported separately.
+  Records the
+  game has not written yet in the current graphics session are not shown by
+  the view and not checked (`placed`, see "Players"); the ball spot is
+  checked at the first frame with the whole line-up written.
+
+  Result (`--ticks 12000 --fast`; the slower clock reaches one play and its
+  instant replay at normal speed, the Alt-E game draws no players): 2,367
+  graphics frames, 1,542 settled; 18,303 isolated player positions, **all
+  at exactly the pixel where the game drew the sprite**; 1,101 stale records
+  hidden while the game computed the line-up; 0 of 1,541 settled frames with a
+  yard line off a 5-yard multiple; 1 of 1 snaps within a yard of the
+  scoreboard's line of scrimmage. Visibility of the discs in the view's own
+  layout, in all four layouts (horizontal or vertical, full field or the
+  auto-framing zoom, the camera eased per tick and contained as in the
+  app): **0 off-screen across the width, 0 along the length, 0 under the
+  scoreboard pill**. The declutter moved a disc by at most 0.45 yd (its
+  cap). PASS.
+
+  A longer normal-speed run (`--ticks 36000`, three plays with instant
+  replays, one a long pass with the field scrolling sideways and along)
+  gives 19,358 graphics frames, 11,978 settled: **0 off-screen and 0 under
+  the pill in all four layouts** (23 disc-frames of one player 6 yards
+  beyond the far sideline were pinned to the edge in the horizontal full
+  field), 0 of 11,973 frames with a yard line off a 5-yard multiple, 3 of
+  3 snaps within a yard, 3,372 stale records hidden. Of 79,194 isolated
+  positions 70,666 match (69,154 exactly, 1,512 one scroll step off), so
+  that run reports FAIL on the 99 % sprite criterion: while the field
+  scrolls sideways (`8753` non-zero, ticks 15,155-18,300) the game draws
+  most sprites one scroll step (8 px, one yard across the field) away from
+  where the records and the scroll variable put them, even in frames where
+  it has just written the records. The rule behind that offset is not
+  known yet, so during sideways scrolls a disc can be up to a yard off
+  across the field; along the field and at all other times the positions
+  are exact.
 * **Passivity.** `lockstep.py --with-ui` runs `GameState.update()` and
   `Screens.build()` on every BIOS tick of the recompiled side (as main.gd does
-  every frame) while comparing it with the oracle at every service call and
-  memory checkpoint. Both `season` (728,068 service calls, `STATS.LOG`
-  byte-identical, the layer ran on 11,587 ticks) and `boot` (541,803 service
-  calls, 4,137 CGA frames identical, the layer ran on 8,524 ticks including
-  4,060 play frames, alternating the horizontal and vertical field) pass with
-  the layer active.
+  every frame), cycling through both field orientations with and without
+  the zoom camera (eased and contained as in `modern_view.gd`), while
+  comparing it with the oracle at every service call and memory checkpoint.
+  `boot` passes with the layer active: 16,496 service calls, 4,904 CGA
+  frames identical, `CONFIG.NFL` identical; the layer ran on 14,692 ticks,
+  3,639 of them play frames, 1,821 with the zoom camera framing a play.
+* **Human coach.** `capture.py humanplay` plays a human coach through the
+  Modern view's own key injection and checks that the called play runs
+  (9/9 states, "YZ Cross" called, "YZ Cross vs 30 Double Zone" run).
 
 ## Limitations
 
@@ -274,15 +377,57 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   gradients, no ids.
 * The previews are rendered by Chromium from the same draw list; Godot's font
   rendering and antialiasing will differ slightly.
-* Without `/i` the game shows plays only on the text field (the ball marker
-  moves); the Modern view then shows the moving ball, not players, because the
-  game does not compute player positions it does not draw.
+* In extra-extra-fast mode (Alt+E) or with the game's graphics turned off,
+  the game computes no player positions; the Modern view then shows the
+  moving ball marker and the play text, not players (see "Players during
+  plays and `/i`").
 * Positions come from the play records as the game draws them; when sprites
   overlap the view separates them by drawing order (defence under offence,
   carrier on top).
 * Team colours are a small built-in table keyed by the team name the game
   prints; other team disks get neutral home blue / away red.
-* Numbered buttons send the digit key. That is what the configuration and
-  the computer coaches' screens accept; the human coach's menus did not react
-  to the digit keys (nor to the keypad keys tried) in the scripted run, so
-  their keypad mapping is still unknown and those buttons may do nothing.
+* Numbered entries of play-calling windows send the coach's keys
+  (F1-F10 or the keypad, "Coach keys"); other numbered options (the
+  configuration) send the digit. Windows of a computer coach get the same
+  buttons; the game ignores them there.
+* The save-game and exit screens were not reached in scripted runs and use
+  the text fallback.
+* While the game scrolls the field sideways (long plays near a sideline) a
+  disc can be up to one yard off across the field (see the 36,000-tick
+  result above).
+
+### Godot 4.3 API audit
+
+Checked by reading every call in `godot/ui/*.gd` and the Modern-view parts
+of `main.gd` against the 4.3 API, since the transpiled tests cannot catch
+what only Godot's analyser or renderer would reject:
+
+* Signatures in use: `Image.load_svg_from_string(svg, scale) -> Error`,
+  `ImageTexture.create_from_image(img)`, `draw_string(font, pos, text,
+  alignment, width, font_size, modulate)`, `Font.get_string_size(text,
+  alignment, width, font_size)`, `draw_set_transform(pos, rot, scale)`
+  (reset to identity after each rotated item), `draw_circle(pos, r, col)`,
+  `draw_arc(c, r, a0, a1, points, col, width, aa)`, `draw_line(..., width,
+  aa)`, `draw_colored_polygon`, `draw_texture_rect(tex, rect, tile)`,
+  `StyleBoxFlat.draw(canvas_item_rid, rect)` with `set_corner_radius_all`,
+  `set_border_width_all`, `corner_detail`, `anti_aliasing`;
+  `ConfigFile.load/save -> Error` (checked), `FileAccess.get_file_as_string`,
+  `JSON.parse_string`, `FontFile.load_dynamic_font`, `Color.html` (all
+  colours are `#rrggbb` or `#rrggbbaa`), `String.contains/get_slice/
+  trim_prefix/trim_suffix/xml_escape/pad_zeros`, `Rect2.get_center`,
+  `OS.find_keycode_from_string`, `KEY_PRINT`, `KEY_KP_*`. All match 4.3.
+* Static typing: a `:=` declaration whose value is a Variant (an element of
+  an untyped Array, arithmetic on one, a ternary with a Variant branch) is a
+  compile error in Godot 4 although gd2py accepts it. A scan of all `:=`
+  lines found two: `MatchView.frame_camera()` (`hi[0] - lo[0]` on untyped
+  arrays) and `_wrap_join()` (a ternary on a loop variable); both now
+  declare `: float` / `: String`. No typed arrays, `@onready` or `@export`
+  are used; static functions use no members; no Python-isms (`len()`,
+  slices, `str * n`, `.items()`, `%` on floats); every `/` has a float
+  operand, so true division in the transpiled tests equals Godot's.
+* `_draw()` only reads the DrawList; `refresh()` builds it and calls
+  `queue_redraw()`.
+* `.import` files: `[remap]` / `importer="keep"` is the 4.x format for
+  "Keep File (exported as is)": the SVGs stay plain files that
+  `FileAccess` can read in the editor and in exports; `state_map.json` is
+  exported as a JSON resource file.

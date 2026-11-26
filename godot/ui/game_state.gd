@@ -79,14 +79,23 @@ var pbp: PackedStringArray = PackedStringArray()   # play/result lines under the
 
 # ---- graphics play
 var play_active: bool = false
-var players: Array = []         # 22 x {fx, fy, team, off, jersey, pos, sx, sy}
-var ball: Dictionary = {}       # {fx, fy, sx, sy, carrier}
+var players: Array = []         # 22 x {fx, fy, team, off, jersey, pos, sx, sy, placed}
+var ball: Dictionary = {}       # {fx, fy, sx, sy, carrier, placed}
 var play_step: int = 0          # increments whenever any record changes
 var play_los: float = -1.0
 var cam_x: int = 0
 var cam_y: int = 0
 var _last_records: PackedInt32Array = PackedInt32Array()
 var _was_graphics: bool = false
+## The play records as they were in text mode (last read before this
+## graphics session), and which records (22 players, the ball) the game has
+## written since the session began.  The game keeps the old records while it
+## switches to graphics and draws the field (about 1.3 s at 1x), then
+## computes the line-up one player at a time; a record it has not written yet
+## is stale and is not shown.
+var _ref_records: PackedInt32Array = PackedInt32Array()
+var _raw_records: PackedInt32Array = PackedInt32Array()
+var _placed: Array = []
 
 
 func _init() -> void:
@@ -170,6 +179,17 @@ func update(mem: PackedByteArray) -> void:
 		_read_field_overview(mem)
 	elif not sb_valid:
 		_scoreboard_from_memory(mem)
+	if graphics:
+		if not _was_graphics:
+			# a new graphics session: nothing written yet (unless there is no
+			# earlier session to compare with)
+			_placed = []
+			for i in range(23):
+				_placed.append(_ref_records.size() != 69)
+		_raw_records = _records(mem)
+		_mark_placed()
+	else:
+		_ref_records = _records(mem)
 	play_active = graphics and mode == 4 and _looks_like_play(mem)
 	if play_active:
 		_read_play(mem)
@@ -323,7 +343,9 @@ func _read_field_overview(mem: PackedByteArray) -> void:
 	# row 24 holds the coaches' status words ("Offense selected")
 	for r in range(19, 25):
 		var s := rows[r].substr(15, 65).strip_edges()
-		if s != "" and not _is_frame_line(s) and rows[r].substr(0, 15).strip_edges() == "":
+		# (questions get their own card with buttons: not repeated as play text)
+		if s != "" and not _is_frame_line(s) and rows[r].substr(0, 15).strip_edges() == "" \
+				and not s.contains("(y/n)") and not s.contains("(L,R)"):
 			pbp.append(s)
 
 
@@ -351,6 +373,40 @@ func _looks_like_play(mem: PackedByteArray) -> bool:
 	return nonzero >= 20
 
 
+## The 23 play records (22 players and the ball): x, y, flags each.
+func _records(mem: PackedByteArray) -> PackedInt32Array:
+	var a := addr("play_records")
+	var recs := PackedInt32Array()
+	recs.resize(69)
+	for i in range(23):
+		recs[i * 3] = s16(mem, a + i * 6)
+		recs[i * 3 + 1] = s16(mem, a + i * 6 + 2)
+		recs[i * 3 + 2] = s16(mem, a + i * 6 + 4)
+	return recs
+
+
+## A record counts as written once its position differs from the one it had
+## in text mode (and is not 0,0); it stays written for the rest of the
+## session (the play and its instant replay).
+func _mark_placed() -> void:
+	for i in range(23):
+		if _placed[i]:
+			continue
+		var x := _raw_records[i * 3]
+		var y := _raw_records[i * 3 + 1]
+		if (x != 0 or y != 0) and (x != _ref_records[i * 3] or y != _ref_records[i * 3 + 1]):
+			_placed[i] = true
+
+
+## Players the game has written in this graphics session (see _placed).
+func placed_count() -> int:
+	var n := 0
+	for i in range(mini(players.size(), 22)):
+		if players[i]["placed"]:
+			n += 1
+	return n
+
+
 func _read_play(mem: PackedByteArray) -> void:
 	cam_x = s16(mem, addr("cam_x"))
 	cam_y = s16(mem, addr("cam_y"))
@@ -362,13 +418,7 @@ func _read_play(mem: PackedByteArray) -> void:
 		off_team = poss if poss > 0 else 2
 	var def_team := 3 - off_team
 	var los_y := los_y_plus if dir_of(off_team) > 0 else los_y_minus
-	var a := addr("play_records")
-	var recs := PackedInt32Array()
-	recs.resize(69)
-	for i in range(23):
-		recs[i * 3] = s16(mem, a + i * 6)
-		recs[i * 3 + 1] = s16(mem, a + i * 6 + 2)
-		recs[i * 3 + 2] = s16(mem, a + i * 6 + 4)
+	var recs := _raw_records
 	if recs != _last_records:
 		play_step += 1
 		_last_records = recs
@@ -383,7 +433,7 @@ func _read_play(mem: PackedByteArray) -> void:
 		var slot := i if off else i - 11
 		var info: Dictionary = (off_ids if off else def_ids)[slot]
 		var p := {"sx": sx, "sy": sy, "team": team, "off": off,
-			"jersey": info["jersey"], "pos": info["pos"]}
+			"jersey": info["jersey"], "pos": info["pos"], "placed": _placed[i]}
 		var f := screen_to_field(sx, sy, los, los_y)
 		p["fx"] = f[0]
 		p["fy"] = f[1]
@@ -396,7 +446,7 @@ func _read_play(mem: PackedByteArray) -> void:
 		if recs[i * 3] == bx and recs[i * 3 + 1] == by:
 			carrier = i
 			break
-	ball = {"sx": bx, "sy": by, "fx": bf[0], "fy": bf[1], "carrier": carrier}
+	ball = {"sx": bx, "sy": by, "fx": bf[0], "fy": bf[1], "carrier": carrier, "placed": _placed[22]}
 	los_fx = los
 
 

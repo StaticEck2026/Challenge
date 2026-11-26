@@ -33,6 +33,7 @@ read from:
 """
 import argparse
 import math
+import zlib
 import os
 import sys
 
@@ -123,13 +124,14 @@ def main():
                      scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Timeouts}{wait:20}{Alt-E}"))
     total = {"frames": 0, "players": 0, "matched": 0, "offscreen": 0, "max_err": 0.0,
              "decl_max": 0.0, "vis": {}, "vis_frames": 0, "iso": 0, "iso_matched": 0, "iso_exact": 0, "spots": [], "line_detail": [],
-             "line_frames": 0, "line_bad": 0, "plays": 0, "spot_bad": 0, "missed": []}
+             "line_frames": 0, "line_bad": 0, "plays": 0, "spot_bad": 0, "missed": [], "unplaced": 0, "settled": 0,
+             "pinned": {}, "pin_detail": [], "iso_shifted": 0}
     for title, args, keys in runs:
         r = harness.Run(a.game_dir, "check", args, keys, max_ticks=a.ticks, log=lambda m: None)
         gs = ui.GameState()
         mv = ui.MatchView(ui.UiArt())
         vdl = ui.DrawList()
-        st = {"was_gfx": False, "marker_fx": None, "cam": {}}
+        st = {"was_gfx": False, "marker_fx": None, "cam": {}, "snapped": False}
 
         def tick(r):
             mem = r.mem
@@ -148,8 +150,16 @@ def main():
                 return
             first = not st["was_gfx"]
             st["was_gfx"] = True
+            if first:
+                st["snapped"] = False
             if not gs.play_active:
                 return
+            # records the game has not written yet in this graphics session
+            # (it keeps the old ones while it draws the field, then computes
+            # the line-up one player at a time) are not shown by the view and
+            # not checked; total["unplaced"] counts them
+            placed = [bool(p["placed"]) for p in gs.players]
+            total["unplaced"] += placed.count(False)
             px = cga_pixels(mem)
             total["frames"] += 1
             off_team = gs.players[0]["team"]
@@ -186,6 +196,11 @@ def main():
                     x0, y0, x1, y1 = mv.viewport
                     key = (field, "zoom" if zoom else "full")
                     c = total["vis"].setdefault(key, [0, 0, 0])
+                    pin = total["pinned"].setdefault(key, 0)
+                    total["pinned"][key] = pin + len(mv.last_pinned)
+                    if mv.last_pinned and len(total["pin_detail"]) < 8:
+                        total["pin_detail"].append((r.gm.ticks, key, [[i_, round(a_, 1), round(b_, 1)]
+                                                                      for i_, a_, b_ in mv.last_pinned]))
                     for (x, y, rr) in mv.last_discs:
                         for (ox0, oy0, ox1, oy1) in mv.occluders:
                             # the disc centre under the scoreboard pill
@@ -199,13 +214,31 @@ def main():
                             c[0] += 1
                         elif along:
                             c[1] += 1
-            # 1. players
+            # 1. players.  The host's clock also ticks on loop back-edges, so a
+            # tick can fall while the game is still erasing and redrawing the
+            # XOR sprites of a frame; the pixel comparison uses only settled
+            # frames: the records and the CGA memory unchanged since the
+            # previous tick (the game is waiting for its next frame)
+            sig = (tuple(gs._raw_records), zlib.crc32(bytes(mem[0xB8000:0xBC000])))
+            settled = sig == st.get("sig")
+            st["sig"] = sig
+            # the scroll when the game last wrote the records: during a
+            # sideways scroll it redraws the sprites shifted by the scroll
+            # step before it writes the next records
+            if sig[0] != st.get("rec"):
+                st["rec"] = sig[0]
+                st["cam_w"] = (gs.cam_x, gs.cam_y)
+            dcx = gs.cam_x - st["cam_w"][0]
+            if settled:
+                total["settled"] += 1
             exp = []
             for p in gs.players:
                 ex, ey = gs.field_to_screen(p["fx"], p["fy"], los, los_y)
-                exp.append((int(round(ex)), int(round(ey))))
+                exp.append((int(round(ex)), int(round(ey))) if p["placed"] else (-1000, -1000))
             bx, by = gs.field_to_screen(gs.ball["fx"], gs.ball["fy"], los, los_y)
             for i, p in enumerate(gs.players):
+                if not placed[i] or not settled:
+                    continue
                 ex, ey = exp[i]
                 # isolated: no other sprite (or the ball) overlapping its 9x9 box
                 iso = all(j == i or abs(ex - qx) >= 10 or abs(ey - qy) >= 10
@@ -216,6 +249,10 @@ def main():
                 total["players"] += 1
                 spr = sprites[0] if p["off"] else sprites[1]
                 best = (sprite_score(px, spr, ex, ey), 0, 0)
+                shifted = False
+                if best[0] < 0.75 and dcx != 0 and sprite_score(px, spr, ex - dcx, ey) >= 0.75:
+                    best = (sprite_score(px, spr, ex - dcx, ey), 0, 0)
+                    shifted = True
                 if best[0] < 0.75:          # not at the exact pixel: search the tolerance window
                     for dy in range(-a.tol, a.tol + 1):
                         for dx in range(-a.tol, a.tol + 1):
@@ -229,11 +266,12 @@ def main():
                     total["max_err"] = max(total["max_err"], float(np.hypot(best[1], best[2])))
                     if iso:
                         total["iso_matched"] += 1
-                        total["iso_exact"] += best[1] == 0 and best[2] == 0
+                        total["iso_exact"] += best[1] == 0 and best[2] == 0 and not shifted
+                        total["iso_shifted"] += shifted
                 elif iso and len(total["missed"]) < 12:
                     total["missed"].append((r.gm.ticks, i, ex, ey, round(best[0], 2)))
             # 2. yard lines: drawn rows must sit on multiples of 5 yards
-            lines = field_lines(px)
+            lines = field_lines(px) if settled else []
             if lines:
                 total["line_frames"] += 1
                 # group rows into drawn lines (the end lines are several
@@ -255,7 +293,12 @@ def main():
                                                          [round(f, 2) for f in fxs], gs.play_step))
                         break
             # 3. ball spot at the snap vs the text overview's marker
-            if first and st["marker_fx"] is not None and gs.ball.get("fx") is not None:
+            # (the first frame of the play with the whole line-up and the ball written)
+            if not st["snapped"] and all(placed) and gs.ball["placed"]:
+                st["snapped"] = True
+            else:
+                return
+            if st["marker_fx"] is not None and gs.ball.get("fx") is not None:
                 total["plays"] += 1
                 total["spots"].append((r.gm.ticks, round(gs.ball["fx"], 2), st["marker_fx"], los))
                 if abs(gs.ball["fx"] - st["marker_fx"]) > 1.0:
@@ -268,10 +311,16 @@ def main():
     print("[check] %d graphics frames, %d on-screen player positions, %d matched a drawn sprite "
           "(%.2f%%), max offset %.1f px (tolerance %d); %d positions scrolled off screen"
           % (t["frames"], t["players"], t["matched"], pct, t["max_err"], a.tol, t["offscreen"]))
+    print("[check] sprite comparison on %d settled frames (records and CGA memory unchanged since "
+          "the previous tick)" % t["settled"])
+    print("[check] %d player records not yet written by the game in their graphics session (stale, "
+          "not shown, not checked)" % t["unplaced"])
     ipct = 100.0 * t["iso_matched"] / max(t["iso"], 1)
     print("[check] isolated players (no other sprite overlapping, so the XOR-drawn shape is intact): "
           "%d, matched %d (%.2f%%), %d of them at exactly the same pixel"
           % (t["iso"], t["iso_matched"], ipct, t["iso_exact"]))
+    print("[check] of them %d drawn shifted by the sideways scroll the game made after writing the records "
+          "(it redraws the sprites before the next records)" % t["iso_shifted"])
     print("[check] (overlapping sprites destroy each other's shapes in the XOR-drawn CGA frame, "
           "so only isolated players are a fair test)")
     print("[check] display-only declutter of the Modern view (zoom disc size): largest disc offset "
@@ -282,6 +331,11 @@ def main():
         print("[check] visibility %-10s %-4s: %d play frames x 22 discs, %d off-screen across the "
               "width, %d off-screen along the length, %d under the scoreboard pill"
               % (key[0], key[1], t["vis_frames"], c[0], c[1], c[2]))
+        if t["pinned"].get(key):
+            print("[check]   %d discs of players far out of bounds pinned to the edge of the view"
+                  % t["pinned"][key])
+    if t["pin_detail"]:
+        print("[check] pinned (tick, layout, [player, fx, fy]): %s" % t["pin_detail"])
     vis_ok = all(c == [0, 0, 0] for c in t["vis"].values())
     print("[check] yard lines: %d frames with lines, %d frames where a drawn line was not on a "
           "5-yard multiple of the view's scale" % (t["line_frames"], t["line_bad"]))

@@ -51,6 +51,8 @@ var columns: Array = []
 var viewport: Array = []
 ## Discs drawn in the last frame: [x, y, r] on the canvas (tests).
 var last_discs: Array = []
+## Discs pinned to the edge of the view in the last frame: [index, fx, fy] (tests).
+var last_pinned: Array = []
 ## Chrome drawn over the field in the last frame: [x0, y0, x1, y1] each (tests).
 var occluders: Array = []
 var _zoomed: bool = false
@@ -102,8 +104,8 @@ func frame_camera(pts: Array) -> Array:
 			hi[k] = maxf(hi[k], float(p[k]))
 	if hi[0] < lo[0]:
 		return [50.0, FIELD_W * 0.5, full_scale()]
-	var span_len := (hi[0] - lo[0] + 2.0 * FRAME_MARGIN) * UPY      # art units
-	var span_wid := (hi[1] - lo[1] + 2.0 * FRAME_MARGIN) * UPY
+	var span_len: float = (hi[0] - lo[0] + 2.0 * FRAME_MARGIN) * UPY      # art units
+	var span_wid: float = (hi[1] - lo[1] + 2.0 * FRAME_MARGIN) * UPY
 	var fa := frame_area()
 	var aw: float = fa[2] - fa[0]
 	var ah: float = fa[3] - fa[1]
@@ -274,6 +276,7 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	_field(dl, gs)
 	_lines(dl, gs)
 	last_discs = []
+	last_pinned = []
 	occluders = []
 	if gs.play_active and gs.players.size() == 22:
 		_players(dl, gs, ui)
@@ -288,17 +291,22 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 
 
 ## The points the zoom camera keeps in view: the 22 players (interpolated
-## positions when the view passes them) and the ball.
+## positions when the view passes them) and the ball, as far as the game has
+## written them in this play (GameState: "placed").
 static func framed_points(gs: GameState, ui: Dictionary) -> Array:
 	var pos: Array = ui.get("players", [])
 	var out := []
 	for i in range(gs.players.size()):
+		if not gs.players[i].get("placed", true):
+			continue
 		if pos.size() == 22:
 			out.append([float(pos[i][0]), float(pos[i][1])])
 		else:
 			out.append([float(gs.players[i]["fx"]), float(gs.players[i]["fy"])])
 	var b: Array = ui.get("ball", [])
-	if b.size() == 2:
+	if not gs.ball.get("placed", true):
+		pass
+	elif b.size() == 2:
 		out.append([float(b[0]), float(b[1])])
 	elif gs.ball.get("fx", -100.0) > -20.0:
 		out.append([float(gs.ball["fx"]), float(gs.ball["fy"])])
@@ -393,6 +401,8 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	var r := maxf(disc * yard_px(), MIN_DISC_PX)
 	disc = r / yard_px()
 	var carrier: int = gs.ball.get("carrier", -1)
+	if carrier >= 0 and not gs.players[carrier].get("placed", true):
+		carrier = -1
 	# defence first, so the offence (and the ball carrier) sit on top
 	var order := []
 	for i in range(11, 22):
@@ -405,7 +415,11 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	var raw := []
 	for i in range(22):
 		var p0: Dictionary = gs.players[i]
-		if pos.size() == 22:
+		if not p0.get("placed", true):
+			# not written by the game yet in this play: not drawn, kept out
+			# of the declutter
+			raw.append([-1000.0 - 10.0 * i, -1000.0])
+		elif pos.size() == 22:
 			raw.append([float(pos[i][0]), float(pos[i][1])])
 		else:
 			raw.append([float(p0["fx"]), float(p0["fy"])])
@@ -415,9 +429,20 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		last_declutter_yards = maxf(last_declutter_yards, _dist(raw[i2], shown[i2]))
 	for i in order:
 		var p: Dictionary = gs.players[i]
+		if not p.get("placed", true):
+			continue
 		var c := pt(shown[i][0], shown[i][1])
 		var x: float = c[0]
 		var y: float = c[1]
+		if viewport.size() == 4:
+			# a player far out of bounds (beyond the margin the full field
+			# shows) is pinned to the edge of the view rather than lost
+			var px := clampf(x, float(viewport[0]) + r, float(viewport[2]) - r)
+			var py := clampf(y, float(viewport[1]) + r, float(viewport[3]) - r)
+			if px != x or py != y:
+				last_pinned.append([i, float(shown[i][0]), float(shown[i][1])])
+				x = px
+				y = py
 		last_discs.append([x, y, r])
 		var team: int = p["team"]
 		var k := team_kit(team)
@@ -440,7 +465,7 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		bfy = shown[carrier][1]
 		var cc := pt(bfx, bfy)
 		_ball(dl, cc[0] + r * 0.8, cc[1] + r * 0.75, 0.62)
-	elif bfx > -20.0:
+	elif bfx > -20.0 and gs.ball.get("placed", true):
 		var cb := pt(bfx, bfy)
 		_ball(dl, cb[0], cb[1], 0.8)
 
@@ -694,7 +719,7 @@ func _wrap_join(dl: DrawList, lines: PackedStringArray, size: float, w: float) -
 	var words := rest.split(" ", false)
 	var cur := ""
 	for wd in words:
-		var t := wd if cur == "" else cur + " " + wd
+		var t: String = wd if cur == "" else cur + " " + wd
 		if dl.measure(t, size) > w and cur != "":
 			out.append(cur)
 			cur = wd

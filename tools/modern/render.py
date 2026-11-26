@@ -63,7 +63,7 @@ def make(ui):
 
 
 def scenario_of(name):
-    return {0: "boot", 1: "boot", 2: "boot", 3: "human", 4: "full", 5: "alt"}.get(int(name[:2]) // 10, name)
+    return {0: "boot", 1: "boot", 2: "boot", 3: "human", 4: "full", 5: "alt", 6: "humanplay"}.get(int(name[:2]) // 10, name)
 
 
 def previous_text_state(name):
@@ -125,10 +125,10 @@ def main():
         print("[svg] %-22s screen=%-9s ops=%4d hotspots=%2d%s" % (n + sfx, sid, len(dl.ops), len(dl.hotspots),
                                                                     extra))
         paths.append(path)
-        if sid == "play" and n.endswith("_mid"):
-            # the same frame with the toolbar's camera "Zoom" on, centred on the ball
-            cam = [gs.ball["fx"], gs.ball["fy"]]
-            path, sid, gs = render_state(ui, n, art, screens, dl, dict(base, zoom=True, camera=cam),
+        if sid == "play" and (n.endswith("_mid") or n.endswith("_late")):
+            # the same frame with the toolbar's camera "Zoom" on: the camera at
+            # rest on the frame that fits all 22 players and the ball
+            path, sid, gs = render_state(ui, n, art, screens, dl, dict(base, zoom=True),
                                          n + "_zoom" + sfx)
             print("[svg] %-22s screen=%-9s (zoom) declutter max %.2f yd"
                   % (n + "_zoom" + sfx, sid, screens.match_view.last_declutter_yards))

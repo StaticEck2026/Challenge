@@ -50,6 +50,7 @@ var _hover: Array = []
 var _last_step: int = -1
 var _prev: Array = []
 var _cur: Array = []
+var _cur_placed: Array = []     # GameState "placed" flags of _cur
 var _ball_prev: Array = []
 var _ball_cur: Array = []
 var _since: float = 0.0
@@ -117,8 +118,10 @@ func _animate(delta: float) -> void:
 	if state.play_active and state.players.size() == 22:
 		if state.play_step != _last_step:
 			var nxt := []
+			var placed := []
 			for p in state.players:
 				nxt.append([float(p["fx"]), float(p["fy"])])
+				placed.append(p.get("placed", true))
 			var b := [float(state.ball.get("fx", -100.0)), float(state.ball.get("fy", 0.0))]
 			if _cur.size() != 22 or _last_step < 0:
 				_prev = nxt
@@ -128,11 +131,15 @@ func _animate(delta: float) -> void:
 				_ball_prev = _blend_one(_ball_prev, _ball_cur)
 				_interval = clampf(lerpf(_interval, _since, 0.35), 0.03, 0.6)
 				for i in range(22):
-					if _far(_prev[i], nxt[i]):
+					# a new play's line-up, or a record the game has only
+					# just written: no animation from the old place
+					if _far(_prev[i], nxt[i]) or not placed[i] \
+							or not (_cur_placed[i] if i < _cur_placed.size() else true):
 						_prev[i] = nxt[i]
 				if _far(_ball_prev, b):
 					_ball_prev = b
 			_cur = nxt
+			_cur_placed = placed
 			_ball_cur = b
 			_since = 0.0
 			_last_step = state.play_step

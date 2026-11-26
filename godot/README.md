@@ -147,8 +147,10 @@ including **Shift**, **Ctrl** and **Alt** combinations (for example **Alt+E**
 "extra-extra-fast", **Alt+L** log mode, **Alt+T** clock, **Alt+S** save at
 half time), **F1-F10**, arrows, **PgUp/PgDn**, **Home/End**, **Ins/Del** and
 the numeric keypad (the game's two coaches use the left and right halves of
-the keyboard). The game's own keys are described in its manual and in
-`ADDENDUM.DOC`.
+the keyboard: the left coach answers his menus with F1-F10, the right coach
+with the keypad digits; the front end keeps the program's NumLock in step
+with yours, so the keypad works either way). The game's own keys are
+described in its manual and in `ADDENDUM.DOC`.
 
 Front-end keys and buttons. The toolbar floats over the top of the screen and
 fades out; move the mouse to the top edge to show it (it stays visible while
@@ -181,13 +183,24 @@ size (sharp at any resolution):
   rosters; if the colours clash only the visitor's discs change colour), moving smoothly between the game's position updates; the ball,
   the line of scrimmage (blue) and the first-down line (yellow), for plays,
   instant replay and the field overview before the snap;
+* *Zoom*: an auto-framing camera for plays that eases to the largest view
+  holding all 22 players and the ball (up to 2.2x, down to the whole field
+  when they spread out), in both orientations; the scoreboard pill turns
+  compact and translucent and never covers a player;
 * a scoreboard pill (team codes, score, quarter, clock, time-outs,
   possession, down and distance), a slim toolbar (View, Speed, Pause, Sound,
   Screenshot, field orientation, Zoom, More, Fullscreen) and an info strip
   with the play text;
-* setup, team selection, match-up, play calling, statistics and prompts as
-  cards and buttons. A button sends the key the screen asks for. Screens it
-  does not recognise show the original text (HD renderer) in a modern frame.
+* setup, team selection, match-up, play calling (also a human coach's
+  plays, kick, fourth-down and penalty menus), team and per-player
+  statistics and prompts as cards and buttons. A button sends the key the
+  screen asks for; a human coach's menu entry sends that coach's own key
+  (F1-F10 or keypad). Screens it does not recognise (save game, exit) show
+  the original text (HD renderer) in a modern frame.
+
+Players are drawn for every play without `/i` (`/i` only adds the instant
+replay); in extra-extra-fast mode (Alt+E) the game computes no positions,
+so the view shows the ball marker and the play text.
 
 It reads the program's memory only (addresses in `ui/state_map.json`) and
 never writes it. The *More* button shows the toolbar with Reset, Game folder

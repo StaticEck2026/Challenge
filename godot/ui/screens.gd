@@ -45,6 +45,8 @@ func classify(gs: GameState) -> String:
 		return "title"
 	if t.contains("TEAM STATISTICS"):
 		return "stats"
+	if t.contains("PgUp and PgDn") and t.contains(" - ") and t.contains("No."):
+		return "player_stats"
 	if t.strip_edges() == "":
 		return "blank"
 	if t.count("*") > 200:
@@ -71,6 +73,8 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> String:
 		_matchup(dl, gs, ui)
 	elif id == "stats":
 		_stats(dl, gs, ui)
+	elif id == "player_stats":
+		_player_stats(dl, gs, ui)
 	elif id == "title" or id == "splash" or id == "graphics" or id == "blank":
 		_title(dl, gs, ui, id)
 	else:
@@ -462,13 +466,19 @@ func _field_windows(dl: DrawList, gs: GameState) -> void:
 	if match_view.vertical:
 		# left column: under the scoreboard; right column: from the top
 		ys = [MatchView.BAR_H + 128.0, MatchView.BAR_H + 16.0]
+	# windows with numbered entries (play lists, kick, fourth-down and penalty
+	# menus) and rosters are side panels; other windows (injury report,
+	# penalty description) are notices
 	var side_boxes := []
 	for b0 in boxes:
-		if int(b0["top"]) >= 18:
-			_notice(dl, gs, b0)
-		else:
+		var wide := int(b0["right"]) - int(b0["left"]) >= 34
+		if numbered(b0["lines"]).size() > 0 or _is_table(b0["lines"]) \
+				or (int(b0["top"]) < 18 and not wide):
 			side_boxes.append(b0)
+		else:
+			_notice(dl, gs, b0)
 	_yes_no(dl, gs)
+	_play_windows_prompt(dl, gs)
 	for b2 in side_boxes:
 		var side := 0 if int(b2["left"]) < 40 else 1
 		if _is_table(b2["lines"]):
@@ -617,6 +627,159 @@ func _yes_no(dl: DrawList, gs: GameState) -> void:
 		key_button(dl, mx - bw - 10.0, y + 76.0, bw, 52.0, "Y", "Yes", true)
 		key_button(dl, mx + 10.0, y + 76.0, bw, 52.0, "N", "No", false)
 		return
+
+
+## "Show play windows (L,R):  LEFT On   RIGHT Off" (the W key): a card with
+## a toggle button per side (typing L or R) and Enter to close it.
+func _play_windows_prompt(dl: DrawList, gs: GameState) -> void:
+	for r in range(18, mini(gs.rows.size(), 25)):
+		var row: String = gs.rows[r]
+		var p := row.find("(L,R)")
+		if p < 0:
+			continue
+		var q := row.substr(0, p).strip_edges()
+		var rest := row.substr(p + 5).replace(":", " ")
+		var w := minf(720.0, _notice_w())
+		var h := 150.0
+		var mx := _notice_cx()
+		var x := mx - w * 0.5
+		var y := match_view.status_y() - h + 8.0
+		var bw := minf(200.0, (w - 80.0) / 3.0)
+		dl.art("panel", x, y, w, h, {"W": w, "H": h, "R": 16.0, "W1": w - 1.5, "H1": h - 1.5})
+		dl.text(mx, y + 50.0, dl.fit(q, 24.0, w - 40.0, true), 24.0, UiTheme.TEXT, "c", true)
+		var sides := [["L", "LEFT", "Left"], ["R", "RIGHT", "Right"]]
+		for i in range(2):
+			var sd: Array = sides[i]
+			var f := rest.find(str(sd[1]))
+			var state := ""
+			if f >= 0:
+				var tail := rest.substr(f + str(sd[1]).length()).strip_edges()
+				state = tail.get_slice(" ", 0)
+			key_button(dl, mx - bw * 1.5 - 10.0 + i * (bw + 10.0), y + 76.0, bw, 52.0, str(sd[0]),
+				"%s %s" % [sd[2], state] if state != "" else str(sd[2]), state == "On")
+		key_button(dl, mx + bw * 0.5 + 10.0, y + 76.0, bw, 52.0, "Enter", "Done", false)
+		return
+
+
+## The per-player pages behind PgDn (Rushing, Passing, ..., Sacks): the
+## game's two "<Team> - <Category>" boxes, with the rows printed under them,
+## as two cards side by side; the rows after "---" are the totals.
+func _player_stats(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
+	frame(dl, ui, "Statistics")
+	var heads := []
+	for b in find_boxes(gs.rows):
+		if b["lines"].size() >= 2 and str(b["lines"][0]).contains(" - ") \
+				and str(b["lines"][1]).contains("No."):
+			heads.append(b)
+	if heads.size() == 0:
+		_fallback(dl, gs, ui)
+		return
+	var footer := ""
+	var last_row := gs.rows.size()
+	for r in range(gs.rows.size()):
+		if gs.rows[r].contains("PgUp"):
+			footer = gs.rows[r].strip_edges()
+			last_row = r
+	var away := gs.short_name(2)
+	var home := gs.short_name(1)
+	var kits := UiTheme.kit_colors(home, away)
+	var cat := str(heads[0]["lines"][0]).get_slice(" - ", 1).strip_edges()
+	var x0 := 120.0
+	var y0 := TOP + 28.0
+	dl.text(x0, y0 + 34.0, cat, 30.0, UiTheme.TEXT, "l", true)
+	var when := "Final" if gs.clock_text == "0:00" and gs.quarter >= 4 else gs.clock_text
+	dl.text(x0, y0 + 62.0, "Player statistics  ·  %s  ·  %s" % [MatchView.quarter_label(gs.quarter),
+		when], 16.0, UiTheme.TEXT_3, "l", true)
+	var gap := 32.0
+	var cw := (UiTheme.W - 2.0 * x0 - gap) / 2.0
+	for i in range(mini(heads.size(), 2)):
+		var b: Dictionary = heads[i]
+		var team := str(b["lines"][0]).get_slice(" - ", 0).strip_edges()
+		var k: Dictionary = kits[1] if team == away else kits[0]
+		var left := int(b["left"]) + 1
+		var span := int(b["right"]) - left
+		var hdr := str(b["lines"][1])
+		# column centres from the header words, in characters
+		var cols := []
+		var c := 0
+		while c < hdr.length():
+			if hdr.substr(c, 1) != " ":
+				var e := c
+				while e < hdr.length() and hdr.substr(e, 1) != " ":
+					e += 1
+				cols.append([hdr.substr(c, e - c), (c + e) * 0.5])
+				c = e
+			else:
+				c += 1
+		var rows := []
+		var total := false
+		for r2 in range(int(b["bottom"]) + 1, last_row):
+			var seg := gs.rows[r2].substr(left, span)
+			if seg.strip_edges() == "":
+				continue
+			if seg.contains("---"):
+				total = true
+				continue
+			# cells: runs separated by two or more spaces, placed under the
+			# nearest header word; text far right of the last column is a note
+			var cells := {}
+			var note := ""
+			var j := 0
+			while j < seg.length():
+				if seg.substr(j, 1) == " ":
+					j += 1
+					continue
+				var e2 := j
+				while e2 < seg.length() and not (seg.substr(e2, 1) == " " \
+						and (e2 + 1 >= seg.length() or seg.substr(e2 + 1, 1) == " ")):
+					e2 += 1
+				var cell := seg.substr(j, e2 - j)
+				var mid := (j + e2) * 0.5
+				var best := -1
+				var bd := 1e9
+				for ci in range(cols.size()):
+					var d := absf(float(cols[ci][1]) - mid)
+					if d < bd:
+						bd = d
+						best = ci
+				if best == cols.size() - 1 and mid - float(cols[best][1]) > 6.0:
+					note = (note + " " + cell).strip_edges()
+				elif best >= 0:
+					cells[best] = cell
+				j = e2
+			rows.append([cells, note, total])
+		var x := x0 + i * (cw + gap)
+		var y := y0 + 96.0
+		var h := 70.0 + 40.0 + rows.size() * 42.0 + 20.0
+		card(dl, x, y, cw, h, k["primary"], 70.0)
+		dl.text_mid(x + 28.0, y + 35.0, team, 24.0, k["primary_text"], "l", true)
+		dl.text_mid(x + cw - 28.0, y + 35.0, cat, 17.0, k["primary_text"], "r", true)
+		var unit := (cw - 56.0) / maxf(float(span), 1.0)
+		var hy := y + 70.0 + 22.0
+		for col in cols:
+			dl.text_mid(x + 28.0 + float(col[1]) * unit, hy, str(col[0]).to_upper(), 13.0,
+				UiTheme.TEXT_3, "c", true)
+		var ry := y + 70.0 + 40.0
+		for rw in rows:
+			var is_total: bool = rw[2]
+			if is_total:
+				dl.rect(x + 20.0, ry, cw - 40.0, 1.0, UiTheme.CARD_LINE)
+			else:
+				dl.rrect(x + 16.0, ry + 3.0, cw - 32.0, 36.0, 8.0, UiTheme.CARD_HI)
+			var cells2: Dictionary = rw[0]
+			for ci2 in cells2:
+				var cx := x + 28.0 + float(cols[int(ci2)][1]) * unit
+				dl.text_mid(cx, ry + 21.0, str(cells2[ci2]), 18.0,
+					UiTheme.TEXT if int(ci2) > 1 or is_total else UiTheme.TEXT_2, "c", is_total or int(ci2) == 0)
+			if str(rw[1]) != "":
+				var lastc := x + 28.0 + float(cols[cols.size() - 1][1]) * unit
+				dl.text_mid(lastc + 28.0, ry + 21.0, str(rw[1]), 16.0, UiTheme.TEXT_2, "l", false)
+			ry += 42.0
+	if footer != "":
+		var by := UiTheme.H - 70.0
+		key_button(dl, UiTheme.W * 0.5 - 420.0, by, 260.0, 52.0, "PgUp", "Previous", false)
+		key_button(dl, UiTheme.W * 0.5 - 130.0, by, 260.0, 52.0, "PgDn", "More stats", false)
+		key_button(dl, UiTheme.W * 0.5 + 160.0, by, 260.0, 52.0, "Enter", "Continue", true)
 
 
 ## TEAM STATISTICS: the game's table as section cards with comparison bars.
