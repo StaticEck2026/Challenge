@@ -1,0 +1,16 @@
+# Original game files are copyrighted: bring your own copy, never commit it.
+godot/dos_c/
+dos_c/
+*.EXE
+*.exe
+*.COM
+*.com
+*.NFL
+*.ROS
+# Generated analysis output (full disassembly listings, screenshots, traces)
+build/
+__pycache__/
+*.pyc
+# Godot
+godot/.godot/
+godot/.import/
