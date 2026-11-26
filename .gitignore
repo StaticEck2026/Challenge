@@ -14,3 +14,6 @@ __pycache__/
 # Godot
 godot/.godot/
 godot/.import/
+
+# Statically recompiled game code: derived from your own NFL.EXE, never commit
+godot/recomp/
