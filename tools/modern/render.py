@@ -63,7 +63,7 @@ def make(ui):
 
 
 def scenario_of(name):
-    return {0: "boot", 1: "boot", 2: "boot", 3: "human", 4: "full"}.get(int(name[:2]) // 10, name)
+    return {0: "boot", 1: "boot", 2: "boot", 3: "human", 4: "full", 5: "alt"}.get(int(name[:2]) // 10, name)
 
 
 def previous_text_state(name):
@@ -115,13 +115,17 @@ def main():
     paths = []
     for n in names:
         path, sid, gs = render_state(ui, n, art, screens, dl)
-        print("[svg] %-22s screen=%-9s ops=%4d hotspots=%2d" % (n, sid, len(dl.ops), len(dl.hotspots)))
+        extra = ""
+        if sid == "play":
+            extra = " declutter max %.2f yd" % screens.match_view.last_declutter_yards
+        print("[svg] %-22s screen=%-9s ops=%4d hotspots=%2d%s" % (n, sid, len(dl.ops), len(dl.hotspots), extra))
         paths.append(path)
         if sid == "play" and n.endswith("_mid"):
             # the same frame with the toolbar's camera "Zoom" on, centred on the ball
             cam = [gs.ball["fx"], gs.ball["fy"]]
             path, sid, gs = render_state(ui, n, art, screens, dl, {"zoom": True, "camera": cam}, n + "_zoom")
-            print("[svg] %-22s screen=%-9s (zoom)" % (n + "_zoom", sid))
+            print("[svg] %-22s screen=%-9s (zoom) declutter max %.2f yd"
+                  % (n + "_zoom", sid, screens.match_view.last_declutter_yards))
             paths.append(path)
     if not a.no_png:
         rasterize(paths)

@@ -365,18 +365,18 @@ func _matchup(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	var keypad := _two_values(gs, "Keypad:")
 	var names := [vis, hom]
 	var teams := [2, 1]
+	var hshort := hom.get_slice(" ", hom.count(" "))
+	var mkits := UiTheme.kit_colors(hshort, vis.get_slice(" ", vis.count(" ")))
 	var cw := 600.0
 	var y := TOP + 70.0
 	for i in range(2):
 		var x := 200.0 if i == 0 else UiTheme.W - 200.0 - cw
 		var nm: String = names[i]
-		var short := nm.get_slice(" ", nm.count(" "))
-		var c: Array = UiTheme.team_colors(short, teams[i])
-		card(dl, x, y, cw, 300.0, c[0], 112.0)
-		dl.text(x + 32.0, y + 42.0, "VISITOR" if i == 0 else "HOME", 15.0, UiTheme.on_color(c[0]) + "b3",
+		var k: Dictionary = mkits[1] if teams[i] == 2 else mkits[0]
+		card(dl, x, y, cw, 300.0, k["fill"], 112.0)
+		dl.text(x + 32.0, y + 42.0, "VISITOR" if i == 0 else "HOME", 15.0, str(k["text"]) + "b3",
 			"l", true)
-		dl.text(x + 32.0, y + 86.0, dl.fit(nm, 34.0, cw - 64.0, true), 34.0, UiTheme.on_color(c[0]),
-			"l", true)
+		dl.text(x + 32.0, y + 86.0, dl.fit(nm, 34.0, cw - 64.0, true), 34.0, k["text"], "l", true)
 		_kv(dl, x + 32.0, y + 148.0, "icon_coach", "Coach", coach[i])
 		_kv(dl, x + 32.0, y + 214.0, "icon_keyboard", "Keypad", keypad[i])
 	dl.text(UiTheme.W * 0.5, y + 165.0, "at", 30.0, UiTheme.TEXT_3, "c", true)
@@ -646,7 +646,7 @@ func _stats(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		sections.append(cur)
 	var away := gs.short_name(2)
 	var home := gs.short_name(1)
-	var kits := UiTheme.match_colors(home, away)
+	var kits := UiTheme.kit_colors(home, away)
 	var k1: Dictionary = kits[1] if t1 == away else kits[0]
 	var k2: Dictionary = kits[0] if t2 == home else kits[1]
 	var c1: String = k1["fill"]

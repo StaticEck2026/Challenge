@@ -19,14 +19,22 @@ const UPY := 10.0
 const FIELD_W := 53.333
 const BAR_H := 52.0
 const STRIP_H := 108.0
-const DISC_R := 0.9          # yards
+const DISC_R := 0.9          # yards, zoomed camera
+const DISC_R_FULL := 0.8     # yards, full field (players are dense at the line)
 const ZOOM := 1.8            # camera "Zoom" during plays
+## Display-only declutter: overlapping discs are pushed apart by at most this
+## fraction of a disc radius (the game's positions stay what they are).
+const DECLUTTER_CAP := 0.5
+const DECLUTTER_ITER := 6
 
 var art: UiArt = null
-var kits: Array = []          # [home kit, away kit] (UiTheme.match_colors)
+var kits: Array = []          # [home kit, away kit] (UiTheme.kit_colors)
 var fx0: float = 0.0           # canvas position of the field art
 var fy0: float = 0.0
 var fs: float = 1.0            # canvas px per art unit
+## Largest display offset the declutter applied in the last frame, in yards.
+var last_declutter_yards: float = 0.0
+var _zoomed: bool = false
 
 
 func _init(p_art: UiArt = null) -> void:
@@ -65,10 +73,16 @@ func yard_px() -> float:
 	return UPY * fs
 
 
-## The team's own colour (end zones, scoreboard blocks).
+## The team's colour this match (end zones, scoreboard blocks, discs): the
+## visitor's changes when it clashes with the home team's (UiTheme.kit_colors).
 func team_color(team: int) -> String:
 	var k: Dictionary = kits[0] if team == 1 else kits[1]
-	return k["primary"]
+	return k["fill"]
+
+
+func team_text(team: int) -> String:
+	var k: Dictionary = kits[0] if team == 1 else kits[1]
+	return k["text"]
 
 
 ## The team's disc style this match (the visitor may wear white).
@@ -88,12 +102,13 @@ func team_code(gs: GameState, team: int) -> String:
 ## interpolated, optional), ball ([fx, fy], optional), marker_fx (optional),
 ## overlay_top (bool: windows cover the field).
 func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
-	kits = UiTheme.match_colors(gs.home_short, gs.away_short)
+	kits = UiTheme.kit_colors(gs.home_short, gs.away_short)
 	dl.rect(0.0, 0.0, UiTheme.W, UiTheme.H, UiTheme.BG)
 	var zoom := 1.0
 	var cam: Array = ui.get("camera", [])
 	if ui.get("zoom", false) and gs.play_active and cam.size() == 2:
 		zoom = ZOOM
+	_zoomed = zoom > 1.0
 	if zoom > 1.0:
 		layout_field(BAR_H, UiTheme.H - STRIP_H, zoom, cam[0], cam[1])
 	else:
@@ -130,9 +145,9 @@ func _field(dl: DrawList, gs: GameState) -> void:
 		ln = gs.short_name(lt).to_upper()
 	if gs.short_name(rt) != "":
 		rn = gs.short_name(rt).to_upper()
-	dl.text(cx(-5.0) + size * DrawList.CAP * 0.5, mid, ln, size, UiTheme.on_color(lc) + "e6", "c",
+	dl.text(cx(-5.0) + size * DrawList.CAP * 0.5, mid, ln, size, team_text(lt) + "e6", "c",
 		true, -90.0)
-	dl.text(cx(105.0) - size * DrawList.CAP * 0.5, mid, rn, size, UiTheme.on_color(rc) + "e6", "c",
+	dl.text(cx(105.0) - size * DrawList.CAP * 0.5, mid, rn, size, team_text(rt) + "e6", "c",
 		true, 90.0)
 	# Yard numbers: bottom ones upright, top ones upside down (as painted).
 	var ns := yard_px() * 2.0
@@ -183,7 +198,8 @@ func _ball(dl: DrawList, x: float, y: float, k: float) -> void:
 
 func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	var pos: Array = ui.get("players", [])
-	var r := DISC_R * yard_px()
+	var disc := DISC_R if _zoomed else DISC_R_FULL
+	var r := disc * yard_px()
 	var carrier: int = gs.ball.get("carrier", -1)
 	# defence first, so the offence (and the ball carrier) sit on top
 	var order := []
@@ -194,15 +210,21 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 			order.append(i)
 	if carrier >= 0:
 		order.append(carrier)
+	var raw := []
+	for i in range(22):
+		var p0: Dictionary = gs.players[i]
+		if pos.size() == 22:
+			raw.append([float(pos[i][0]), float(pos[i][1])])
+		else:
+			raw.append([float(p0["fx"]), float(p0["fy"])])
+	var shown := declutter(raw, disc)
+	last_declutter_yards = 0.0
+	for i2 in range(22):
+		last_declutter_yards = maxf(last_declutter_yards, _dist(raw[i2], shown[i2]))
 	for i in order:
 		var p: Dictionary = gs.players[i]
-		var fx: float = p["fx"]
-		var fy: float = p["fy"]
-		if pos.size() == 22:
-			fx = pos[i][0]
-			fy = pos[i][1]
-		var x := cx(fx)
-		var y := cy(fy)
+		var x := cx(shown[i][0])
+		var y := cy(shown[i][1])
 		var team: int = p["team"]
 		var k := team_kit(team)
 		if i == carrier:
@@ -219,6 +241,9 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		bfx = bpos[0]
 		bfy = bpos[1]
 	if carrier >= 0:
+		# with the carrier, wherever the declutter put his disc
+		bfx = shown[carrier][0]
+		bfy = shown[carrier][1]
 		_ball(dl, cx(bfx) + r * 0.8, cy(bfy) + r * 0.75, 0.62)
 	elif bfx > -20.0:
 		_ball(dl, cx(bfx), cy(bfy), 0.8)
@@ -291,8 +316,8 @@ func scoreboard(dl: DrawList, gs: GameState) -> void:
 		"XR": w - bw - r, "MW": w - 2.0 * bw, "W1": w - 2.0, "H1": h - 2.0, "left": away,
 		"right": home, "SL": bw + sw, "SR": w - bw - sw, "SY": 12.0, "SH": h - 24.0})
 	var mid := y0 + h * 0.5
-	var on_away := UiTheme.on_color(away)
-	var on_home := UiTheme.on_color(home)
+	var on_away := team_text(2)
+	var on_home := team_text(1)
 	dl.text_mid(x0 + bw * 0.5 + 6.0, mid, team_code(gs, 2), 22.0, on_away, "c", true)
 	dl.text_mid(x0 + w - bw * 0.5 - 6.0, mid, team_code(gs, 1), 22.0, on_home, "c", true)
 	dl.text_mid(x0 + bw + sw * 0.5 + 8.0, mid, str(gs.score_away), 28.0, UiTheme.TEXT, "c", true)
@@ -306,8 +331,8 @@ func scoreboard(dl: DrawList, gs: GameState) -> void:
 		var bw2 := 22.0
 		dl.art("ball", px - bw2 * 0.5, mid - bw2 * 13.0 / 40.0, bw2, bw2 * 26.0 / 40.0)
 	# time-outs: three dots under each team block
-	_timeouts(dl, x0 + bw * 0.5 + 6.0, y0 + h - 9.0, gs.timeouts_away, UiTheme.on_color(away))
-	_timeouts(dl, x0 + w - bw * 0.5 - 6.0, y0 + h - 9.0, gs.timeouts_home, UiTheme.on_color(home))
+	_timeouts(dl, x0 + bw * 0.5 + 6.0, y0 + h - 9.0, gs.timeouts_away, on_away)
+	_timeouts(dl, x0 + w - bw * 0.5 - 6.0, y0 + h - 9.0, gs.timeouts_home, on_home)
 	# down & distance tab under the pill
 	var dd := down_distance(gs)
 	if dd != "":
@@ -374,9 +399,9 @@ func _strip(dl: DrawList, gs: GameState) -> void:
 	if team == 1 or team == 2:
 		var c := team_color(team)
 		dl.rrect(x, y0 + 22.0, 64.0, 64.0, 14.0, c)
-		dl.text_mid(x + 32.0, y0 + 54.0, team_code(gs, team), 20.0, UiTheme.on_color(c), "c", true)
+		dl.text_mid(x + 32.0, y0 + 54.0, team_code(gs, team), 20.0, team_text(team), "c", true)
 		_timeouts(dl, x + 32.0, y0 + 76.0, gs.timeouts_home if team == 1 else gs.timeouts_away,
-			UiTheme.on_color(c))
+			team_text(team))
 		dl.text(x + 82.0, y0 + 46.0, dl.fit(gs.full_name(team), 20.0, 300.0, true), 20.0, UiTheme.TEXT,
 			"l", true)
 		dl.text(x + 82.0, y0 + 74.0, "Ball  ·  " + quarter_label(gs.quarter) + " quarter", 15.0,
@@ -437,3 +462,51 @@ func _chips(dl: DrawList, gs: GameState, x: float, y: float) -> void:
 		dl.ring(px + 18.0, y + 26.0, 16.0, 2.0, k["rim"])
 		dl.text_mid(px + 18.0, y + 26.0, str(p["jersey"]), 15.0, k["text"], "c", true)
 		dl.text(px + 18.0, y + 66.0, str(p["pos"]), 12.0, UiTheme.TEXT_2, "c", true)
+
+
+## Pushes overlapping discs (radius r yards) apart for display, a few
+## relaxation passes, each disc moved at most DECLUTTER_CAP * r from its real
+## position. Deterministic: pairs are visited in index order.
+static func declutter(pts: Array, r: float) -> Array:
+	var out := []
+	for p in pts:
+		out.append([float(p[0]), float(p[1])])
+	var want := 2.0 * r * 0.92
+	var cap := DECLUTTER_CAP * r
+	for _it in range(DECLUTTER_ITER):
+		var moved := false
+		for i in range(out.size()):
+			for j in range(i + 1, out.size()):
+				var dx: float = out[j][0] - out[i][0]
+				var dy: float = out[j][1] - out[i][1]
+				var d := sqrt(dx * dx + dy * dy)
+				if d >= want:
+					continue
+				if d < 0.0001:
+					dx = 0.0
+					dy = 1.0
+					d = 1.0
+				var push := (want - d) * 0.5
+				out[i] = [out[i][0] - dx / d * push, out[i][1] - dy / d * push]
+				out[j] = [out[j][0] + dx / d * push, out[j][1] + dy / d * push]
+				moved = true
+		for k in range(out.size()):
+			out[k] = _clamp_offset(pts[k], out[k], cap)
+		if not moved:
+			break
+	return out
+
+
+static func _clamp_offset(orig: Array, p: Array, cap: float) -> Array:
+	var dx: float = p[0] - orig[0]
+	var dy: float = p[1] - orig[1]
+	var d := sqrt(dx * dx + dy * dy)
+	if d <= cap:
+		return p
+	return [orig[0] + dx / d * cap, orig[1] + dy / d * cap]
+
+
+static func _dist(a: Array, b: Array) -> float:
+	var dx: float = a[0] - b[0]
+	var dy: float = a[1] - b[1]
+	return sqrt(dx * dx + dy * dy)

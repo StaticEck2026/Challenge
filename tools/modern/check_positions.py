@@ -113,7 +113,7 @@ def main():
         runs.append(("instant replay, Alt-E", "/i",
                      scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Timeouts}{wait:20}{Alt-E}"))
     total = {"frames": 0, "players": 0, "matched": 0, "offscreen": 0, "max_err": 0.0,
-             "iso": 0, "iso_matched": 0, "iso_exact": 0, "spots": [], "line_detail": [],
+             "decl_max": 0.0, "iso": 0, "iso_matched": 0, "iso_exact": 0, "spots": [], "line_detail": [],
              "line_frames": 0, "line_bad": 0, "plays": 0, "spot_bad": 0, "missed": []}
     for title, args, keys in runs:
         r = harness.Run(a.game_dir, "check", args, keys, max_ticks=a.ticks, log=lambda m: None)
@@ -144,6 +144,13 @@ def main():
             off_team = gs.players[0]["team"]
             los_y = gs.los_y_plus if gs.dir_of(off_team) > 0 else gs.los_y_minus
             los = gs.play_los
+            # display-only declutter of the view (not used by the checks
+            # above/below, which compare the game's own positions): how far
+            # does it move a disc?
+            raw = [[p["fx"], p["fy"]] for p in gs.players]
+            shown = ui.MatchView.declutter(raw, ui.MatchView.DISC_R)
+            total["decl_max"] = max(total["decl_max"], max(
+                ((a_[0] - b_[0]) ** 2 + (a_[1] - b_[1]) ** 2) ** 0.5 for a_, b_ in zip(raw, shown)))
             # 1. players
             exp = []
             for p in gs.players:
@@ -219,6 +226,9 @@ def main():
           % (t["iso"], t["iso_matched"], ipct, t["iso_exact"]))
     print("[check] (overlapping sprites destroy each other's shapes in the XOR-drawn CGA frame, "
           "so only isolated players are a fair test)")
+    print("[check] display-only declutter of the Modern view (zoom disc size): largest disc offset "
+          "%.2f yd (cap %.2f yd); the checks use the unadjusted positions"
+          % (t["decl_max"], ui.MatchView.DECLUTTER_CAP * ui.MatchView.DISC_R))
     print("[check] yard lines: %d frames with lines, %d frames where a drawn line was not on a "
           "5-yard multiple of the view's scale" % (t["line_frames"], t["line_bad"]))
     print("[check] ball at the snap vs the line of scrimmage on the text scoreboard: %d plays, "

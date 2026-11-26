@@ -37,6 +37,11 @@ const TEXT_PALETTE := [
 	"#0c0f14", "#2f5fd0", "#2fae4f", "#23a9b5", "#c8343a", "#b04bc4", "#c8822b", "#c5cad3",
 	"#5b6270", "#6ea0ff", "#6be08a", "#63e3ef", "#ff6b6b", "#e58cff", "#ffe066", "#f5f7fa"]
 
+## Minimum perceptual distance (OKLab, x100) between the two teams' colours.
+const CLASH_DISTANCE := 18.0
+## Neutral kits for a visitor whose primary and secondary both clash.
+const NEUTRAL_KITS := ["#f8fafc", "#111827", "#dc2626", "#f59e0b"]
+
 const HOME_DEFAULT := ["#2563eb", "#dbeafe"]
 const AWAY_DEFAULT := ["#dc2626", "#fee2e2"]
 
@@ -67,17 +72,47 @@ static func team_colors(short_name: String, team: int) -> Array:
 	return HOME_DEFAULT if team == 1 else AWAY_DEFAULT
 
 
-## Disc styles ("kits") for both teams: [home, away], each
-## {"fill", "rim", "text", "primary"}.  If the primaries are close, the
-## visitor wears white with its colour as rim and number, as road teams do.
+## Team styles ("kits") for a match: [home, away], each {"fill", "rim",
+## "text", "primary"}; "fill" is used everywhere the team is shown (end zone,
+## scoreboard block, discs, chips, statistics pills).  The home team keeps its
+## primary colour.  If the visitor's primary is perceptually too close to it
+## (OKLab distance under CLASH_DISTANCE), the visitor switches to its
+## secondary colour; if that clashes as well, to the neutral kit farthest from
+## the home colour.  Text on a kit is white or near-black, whichever has the
+## higher contrast (WCAG), or the team colour itself on a white kit.
+static func kit_colors(home_key: String, away_key: String) -> Array:
+	var h: Array = team_colors(home_key, 1)
+	var a: Array = team_colors(away_key, 2)
+	var home_fill: String = h[0]
+	var away_fill: String = a[0]
+	if oklab_distance(home_fill, away_fill) < CLASH_DISTANCE:
+		if oklab_distance(home_fill, a[1]) >= CLASH_DISTANCE:
+			away_fill = a[1]
+		else:
+			var best := 0.0
+			for c in NEUTRAL_KITS:
+				var d := oklab_distance(home_fill, c)
+				if d > best:
+					best = d
+					away_fill = c
+	return [make_kit(home_fill, h[0]), make_kit(away_fill, a[0])]
+
+
+## Kept for callers of the first version: same as kit_colors().
 static func match_colors(home: String, away: String) -> Array:
-	var h: Array = team_colors(home, 1)
-	var a: Array = team_colors(away, 2)
-	var hk := kit(h[0], shade(h[0], 0.62), on_color(h[0]), h[0])
-	var ak := kit(a[0], shade(a[0], 0.62), on_color(a[0]), a[0])
-	if color_distance(h[0], a[0]) < 90.0:
-		ak = kit("#f8fafc", a[0], a[0], a[0])
-	return [hk, ak]
+	return kit_colors(home, away)
+
+
+## A kit on `fill`; `team` is the team's own primary colour, used for the rim
+## and the number when the fill is light enough for it to read.
+static func make_kit(fill: String, team: String) -> Dictionary:
+	var txt := on_color(fill)
+	var rim := shade(fill, 0.62)
+	if fill != team and luminance(fill) > 0.7:
+		rim = team
+		if contrast(team, fill) >= 4.5:
+			txt = team
+	return kit(fill, rim, txt, fill)
 
 
 static func kit(fill: String, rim: String, txt: String, primary: String) -> Dictionary:
@@ -105,9 +140,54 @@ static func luminance(hex: String) -> float:
 	return (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255.0
 
 
-## White or near-black text, whichever reads better on `bg`.
+## White or near-black text, whichever has the higher contrast on `bg`.
 static func on_color(bg: String) -> String:
-	return "#111827" if luminance(bg) > 0.62 else "#ffffff"
+	return "#111827" if contrast("#111827", bg) > contrast("#ffffff", bg) else "#ffffff"
+
+
+## WCAG contrast ratio of two colours (1..21).
+static func contrast(a: String, b: String) -> float:
+	var la := rel_luminance(a)
+	var lb := rel_luminance(b)
+	return (maxf(la, lb) + 0.05) / (minf(la, lb) + 0.05)
+
+
+## WCAG relative luminance (linear sRGB).
+static func rel_luminance(hex: String) -> float:
+	var c := rgb(hex)
+	var lin := []
+	for i in range(3):
+		lin.append(_linear(float(c[i]) / 255.0))
+	return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+static func _linear(v: float) -> float:
+	return v / 12.92 if v <= 0.04045 else pow((v + 0.055) / 1.055, 2.4)
+
+
+## OKLab coordinates [L, a, b] of an sRGB colour.
+static func oklab(hex: String) -> Array:
+	var c := rgb(hex)
+	var r := _linear(float(c[0]) / 255.0)
+	var g := _linear(float(c[1]) / 255.0)
+	var bl := _linear(float(c[2]) / 255.0)
+	var l := pow(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * bl, 1.0 / 3.0)
+	var m := pow(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * bl, 1.0 / 3.0)
+	var s := pow(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * bl, 1.0 / 3.0)
+	return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+		1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+		0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s]
+
+
+## Perceptual distance of two colours: Euclidean in OKLab, x100.
+static func oklab_distance(a: String, b: String) -> float:
+	var x := oklab(a)
+	var y := oklab(b)
+	var d := 0.0
+	for i in range(3):
+		var k: float = float(x[i]) - float(y[i])
+		d += k * k
+	return sqrt(d) * 100.0
 
 
 ## Darker shade of a colour (outline of a disc).

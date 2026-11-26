@@ -13,7 +13,8 @@ DGROUP; <name>.json the tick and the screen text.  Nothing here is committed
 Scenarios: boot (CPU vs CPU with instant replay: setup screens, field,
 plays, replay), human (a human coach on the right keypad), full (a whole game
 at extra-extra-fast speed: half-time and final statistics, injuries, the
-"Another Game" prompt).
+"Another Game" prompt), alt (Dolphins at Bills: team colours that do not
+clash).
 """
 import argparse
 import json
@@ -172,7 +173,26 @@ def scenario_full(game_dir, log):
     return plan.i, len(pts)
 
 
-SCENARIOS = {"boot": scenario_boot, "human": scenario_human, "full": scenario_full}
+def scenario_alt(game_dir, log):
+    """A second match-up whose colours do not clash: Dolphins at Bills."""
+    keys = (scripts.CONFIG_KEYS + "{when:home team}{Enter}{when:visiting team}{Down}{Down}{Enter}"
+            "{when:Choose the coach}c{when:Right keypad}r{when:coach for the Dolphins}c"
+            "{when:Timeouts}" + "{wait:2000}" * 3)
+    pts = [
+        ("50_alt_coin_toss", has("It is"), 6),
+        ("51_alt_play_calling", field_with("Defense selected"), 2),
+        ("52_alt_play_mid", graphics_tick(28), 0),
+        ("53_alt_play_result", field_with("Tackled by"), 4),
+        ("54_alt_play2_mid", graphics_tick(40), 0),
+    ]
+    r = harness.Run(game_dir, "cap-alt", "/i", keys, max_ticks=6000, log=log)
+    plan = Plan(pts, log)
+    r.on_tick = plan.on_tick
+    r.run()
+    return plan.i, len(pts)
+
+
+SCENARIOS = {"boot": scenario_boot, "human": scenario_human, "full": scenario_full, "alt": scenario_alt}
 
 
 def main():

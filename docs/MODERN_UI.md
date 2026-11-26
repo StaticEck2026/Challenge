@@ -54,8 +54,19 @@ screenshot key. The program thread is unchanged.
 * **Players.** A disc per player in the team colour with a darker rim and
   the jersey number from the game's roster (position letters if a number is
   missing); the ball carrier gets a yellow ring and the ball sits at his
-  side. If the two teams' colours are too close, the visitor wears white
-  with its colour as rim and number. Discs move smoothly: the game updates
+  side. Discs are 0.8 yd in radius on the full field and 0.9 yd with the zoom
+  camera. A display-only declutter (6 relaxation passes) pushes overlapping
+  discs apart, at most half a disc radius (0.40 / 0.45 yd), so numbers at
+  the line stay readable; drawing order is defence, offence, ball carrier.
+  The game's positions are not changed (the position check uses them).
+* **Team colours** (`UiTheme.kit_colors`). The home team keeps its primary
+  colour. If the visitor's primary is closer than 18 (OKLab distance x100),
+  the visitor switches to its secondary colour; if that clashes too, to the
+  neutral kit (white, near-black, red, amber) farthest from the home colour.
+  The result is used everywhere: end zones, scoreboard blocks, discs, chips,
+  match-up cards and statistics pills. Text on a colour is white or
+  near-black by WCAG contrast; on a white kit it is the team colour when that
+  has at least 4.5:1 contrast. Discs move smoothly: the game updates
   positions a few times a second, the view interpolates between two updates
   over the measured update interval, at the display's frame rate. Jumps over
   9 yards (a new play) are not animated.
@@ -135,9 +146,10 @@ draws it).
 
 ## Screens covered
 
-Driven through the recompiled program in three scripted runs (CPU vs CPU
-with instant replay, a human coach on the right keypad, and a whole game at
-extra-extra-fast speed to the "Another Game" question):
+Driven through the recompiled program in four scripted runs (CPU vs CPU
+with instant replay, Colts at Bills and Dolphins at Bills; a human coach on
+the right keypad; a whole game at extra-extra-fast speed to the "Another
+Game" question):
 
 | Screen | Modern layout | Preview |
 |--------|---------------|---------|
@@ -207,7 +219,8 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   multiple; 9 of 9 snaps within a yard of the scoreboard's line of
   scrimmage. Counting overlapping sprites too, 79.5 % of 111,255 positions
   match a recognisable sprite within 2 px (the rest are shapes destroyed by
-  XOR overlap). PASS.
+  XOR overlap). The display-only declutter moved a disc by at most 0.45 yd
+  (its cap). PASS.
 * **Passivity.** `lockstep.py --with-ui` runs `GameState.update()` and
   `Screens.build()` on every BIOS tick of the recompiled side (as main.gd does
   every frame) while comparing it with the oracle at every service call and
