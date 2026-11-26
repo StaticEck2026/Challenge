@@ -228,3 +228,20 @@ clearly that the GDScript build was **not executed** in this sandbox.
   ops.
 - Final report: what runs, the screenshots taken (paths), what is untested,
   performance, and known gaps.
+
+---
+
+## Errata found while executing this prompt
+
+Static analysis (`docs/NFL_EXE_ANALYSIS.md`) corrected several recon guesses above:
+
+- **There is no INT 83h.** The `CD 83` byte pairs are operands of `[0x83CD]`.
+  Overlays are reached through 93 far-call thunks into the PLINK86 manager at
+  `191F:02D1`, and the overlay table is at `18B4:0000`.
+- **No 80186 opcodes are reachable.** The code is plain 8086, plus one `FNINIT`.
+- **BIOS calls are simulated.** The C runtime's `int86()` pushes FLAGS/CS/IP and
+  jumps through the IVT, so BIOS services must trigger on reaching the handler
+  address, not on an `INT` opcode.
+- **The program hooks no interrupt vectors through DOS.** It never calls AH=25h or
+  AH=35h.
+- **The team-disk prefix defaults to `b:`** when there is no `config.nfl`.
