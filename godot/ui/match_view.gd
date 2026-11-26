@@ -21,11 +21,14 @@ const BAR_H := 52.0
 const STRIP_H := 108.0
 const DISC_R := 0.9          # yards, zoomed camera
 const DISC_R_FULL := 0.8     # yards, full field (players are dense at the line)
-const ZOOM := 1.8            # camera "Zoom" during plays (at most)
-## Yards beyond each sideline the zoom camera keeps in view.
-const ZOOM_MARGIN := 1.5
-## Height the scoreboard pill and its tab take under the toolbar.
-const PILL_SPACE := 96.0
+const ZOOM := 2.2            # camera "Zoom": at most this times the full-field scale
+## Yards the zoom camera keeps around the players and the ball.
+const FRAME_MARGIN := 3.0
+## Height reserved under the toolbar for the (compact) scoreboard pill during
+## zoom: the camera frames the players below it.
+const PILL_SPACE := 84.0
+## Zoom camera easing rate (1/s), used by modern_view.gd.
+const CAMERA_RATE := 2.5
 ## Display-only declutter: overlapping discs are pushed apart by at most this
 ## fraction of a disc radius (the game's positions stay what they are).
 const DECLUTTER_CAP := 0.5
@@ -70,27 +73,101 @@ func layout_field(left: float, top: float, aw: float, ah: float) -> void:
 	fy0 = top + (ah - fh * fs) * 0.5
 
 
-## Zoom camera: as large as ZOOM times the horizontal full-field scale while
-## the field's whole width (sideline to sideline, plus 1.5 yd) still fits the
-## space between the toolbar and the strip (horizontal) or the screen width
-## (vertical); centred across the field, following fx along its length.
-func layout_zoom(cam_fx: float) -> void:
-	var top := BAR_H
-	var ah := UiTheme.H - STRIP_H - BAR_H
-	var base := minf((UiTheme.W - 80.0) / ART_W, (ah - 92.0) / ART_H)
-	var span := FIELD_W * UPY + 2.0 * ZOOM_MARGIN * UPY
-	var across := (UiTheme.W - 80.0) if vertical else ah
-	fs = minf(base * ZOOM, across / span)
-	var v_mid := ART_Y0 + FIELD_W * 0.5 * UPY
-	var u_cam := ART_X0 + (clampf(cam_fx, -10.0, 110.0) + 10.0) * UPY
+## The area the zoom camera frames players in: under the toolbar and the
+## compact pill, above the strip.  [x0, y0, x1, y1]
+func frame_area() -> Array:
+	return [24.0, BAR_H + PILL_SPACE, UiTheme.W - 24.0, UiTheme.H - STRIP_H - 12.0]
+
+
+## Full-field scale of the current orientation (canvas px per art unit).
+func full_scale() -> float:
+	var top := BAR_H + 78.0
+	var bottom := UiTheme.H - STRIP_H - 14.0
 	if vertical:
-		# the ball sits in the middle of the space under the scoreboard pill
-		var mid_y := top + PILL_SPACE + (ah - PILL_SPACE) * 0.5
-		fx0 = UiTheme.W * 0.5 - v_mid * fs
-		fy0 = clampf(mid_y - (ART_W - u_cam) * fs, top + ah - ART_W * fs, top)
-	else:
-		fy0 = top + ah * 0.5 - v_mid * fs
-		fx0 = clampf(UiTheme.W * 0.5 - u_cam * fs, UiTheme.W - ART_W * fs, 0.0)
+		return minf((UiTheme.W - 80.0) / ART_H, (UiTheme.H - 12.0 - BAR_H - 12.0) / ART_W)
+	return minf((UiTheme.W - 80.0) / ART_W, (bottom - top) / ART_H)
+
+
+## Target of the auto-framing zoom camera: [centre fx, centre fy, scale] that
+## shows every point in `pts` (field yards: the 22 players and the ball) plus
+## FRAME_MARGIN, as large as fits frame_area(), at most ZOOM times the
+## full-field scale (the cap gives way only towards smaller scales, so the
+## players always fit).
+func frame_camera(pts: Array) -> Array:
+	var lo := [1000.0, 1000.0]
+	var hi := [-1000.0, -1000.0]
+	for p in pts:
+		for k in range(2):
+			lo[k] = minf(lo[k], float(p[k]))
+			hi[k] = maxf(hi[k], float(p[k]))
+	if hi[0] < lo[0]:
+		return [50.0, FIELD_W * 0.5, full_scale()]
+	var span_len := (hi[0] - lo[0] + 2.0 * FRAME_MARGIN) * UPY      # art units
+	var span_wid := (hi[1] - lo[1] + 2.0 * FRAME_MARGIN) * UPY
+	var fa := frame_area()
+	var aw: float = fa[2] - fa[0]
+	var ah: float = fa[3] - fa[1]
+	var fit := minf(ah / span_len, aw / span_wid) if vertical \
+		else minf(aw / span_len, ah / span_wid)
+	var sc := minf(fit, full_scale() * ZOOM)
+	return [(lo[0] + hi[0]) * 0.5, (lo[1] + hi[1]) * 0.5, sc]
+
+
+## A (smoothed) camera corrected so that every point still fits: the scale is
+## never larger than frame_camera() allows and the centre moves just enough
+## to bring all points inside frame_area() with FRAME_MARGIN.
+func contain_camera(cam: Array, pts: Array) -> Array:
+	var t := frame_camera(pts)
+	var sc := minf(float(cam[2]), float(t[2]))
+	var lo := [1000.0, 1000.0]
+	var hi := [-1000.0, -1000.0]
+	for p in pts:
+		for k in range(2):
+			lo[k] = minf(lo[k], float(p[k]))
+			hi[k] = maxf(hi[k], float(p[k]))
+	if hi[0] < lo[0]:
+		return t
+	var fa := frame_area()
+	var aw: float = fa[2] - fa[0]
+	var ah: float = fa[3] - fa[1]
+	var half_len := ((ah if vertical else aw) / (sc * UPY)) * 0.5 - FRAME_MARGIN
+	var half_wid := ((aw if vertical else ah) / (sc * UPY)) * 0.5 - FRAME_MARGIN
+	var cx := clampf(float(cam[0]), hi[0] - half_len, lo[0] + half_len)
+	var cy := clampf(float(cam[1]), hi[1] - half_wid, lo[1] + half_wid)
+	return [cx, cy, sc]
+
+
+## Lays the field out for a camera [centre fx, centre fy, scale]: the centre
+## lands in the middle of frame_area().  The view is then kept on the field
+## art where that does not push a framed point out of the area.
+func layout_camera(cam: Array, pts: Array) -> void:
+	fs = float(cam[2])
+	var fa := frame_area()
+	fx0 = 0.0
+	fy0 = 0.0
+	var c := pt(float(cam[0]), float(cam[1]))
+	fx0 = (fa[0] + fa[2]) * 0.5 - c[0]
+	fy0 = (fa[1] + fa[3]) * 0.5 - c[1]
+	# prefer not to show beyond the field art's edges ...
+	var fr := field_rect()
+	var dx := 0.0
+	var dy := 0.0
+	if fr[2] >= UiTheme.W:
+		dx = clampf(fx0, UiTheme.W - fr[2], 0.0) - fx0
+	if fr[3] >= UiTheme.H - STRIP_H - BAR_H:
+		dy = clampf(fy0, UiTheme.H - STRIP_H - fr[3], BAR_H) - fy0
+	# ... unless that would push a framed point out of the area
+	var ok := true
+	for p in pts:
+		var q := pt(float(p[0]), float(p[1]))
+		var qx: float = q[0] + dx
+		var qy: float = q[1] + dy
+		if qx < fa[0] or qx > fa[2] or qy < fa[1] or qy > fa[3]:
+			ok = false
+			break
+	if ok:
+		fx0 += dx
+		fy0 += dy
 
 
 ## The one orientation transform: field yards (fx from the left goal line of
@@ -169,8 +246,12 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	dl.rect(0.0, 0.0, UiTheme.W, UiTheme.H, UiTheme.BG)
 	var zoom := 1.0
 	var cam: Array = ui.get("camera", [])
-	if ui.get("zoom", false) and gs.play_active and cam.size() == 2:
+	var framed := []
+	if ui.get("zoom", false) and gs.play_active and gs.players.size() == 22:
 		zoom = ZOOM
+		framed = framed_points(gs, ui)
+		if cam.size() != 3:
+			cam = frame_camera(framed)
 	_zoomed = zoom > 1.0
 	var top := BAR_H + (12.0 if vertical else 78.0)
 	var bottom := UiTheme.H - (12.0 if vertical else STRIP_H + 14.0)
@@ -179,7 +260,7 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		# zoom: the whole width of the field stays visible, the camera
 		# follows the ball along the field's length; the chrome is the
 		# horizontal view's (pill at the top centre, strip at the bottom)
-		layout_zoom(cam[0])
+		layout_camera(cam, framed)
 		viewport = [0.0, BAR_H, UiTheme.W, UiTheme.H - STRIP_H]
 	elif vertical:
 		# the field fills the height, centred; the side columns stay free
@@ -199,11 +280,29 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	else:
 		_ball_marker(dl, gs, ui)
 	toolbar(dl, ui)
-	scoreboard(dl, gs)
+	scoreboard(dl, gs, _zoomed)
 	if vertical and columns.size() == 4:
 		_side_info(dl, gs)
 	else:
 		_strip(dl, gs)
+
+
+## The points the zoom camera keeps in view: the 22 players (interpolated
+## positions when the view passes them) and the ball.
+static func framed_points(gs: GameState, ui: Dictionary) -> Array:
+	var pos: Array = ui.get("players", [])
+	var out := []
+	for i in range(gs.players.size()):
+		if pos.size() == 22:
+			out.append([float(pos[i][0]), float(pos[i][1])])
+		else:
+			out.append([float(gs.players[i]["fx"]), float(gs.players[i]["fy"])])
+	var b: Array = ui.get("ball", [])
+	if b.size() == 2:
+		out.append([float(b[0]), float(b[1])])
+	elif gs.ball.get("fx", -100.0) > -20.0:
+		out.append([float(gs.ball["fx"]), float(gs.ball["fy"])])
+	return out
 
 
 func _left_team(gs: GameState) -> int:
@@ -401,48 +500,55 @@ static func _chrome(w: float, h: float, r: float, extra: Dictionary) -> Dictiona
 
 ## The scoreboard pill: [visitor code | score]  quarter  clock  [score | home code],
 ## with possession dots and time-outs, and down & distance underneath.
-func scoreboard(dl: DrawList, gs: GameState) -> void:
-	var h := 56.0
-	var bw := 96.0
-	var sw := 96.0
-	var mw := 168.0
+func scoreboard(dl: DrawList, gs: GameState, compact: bool = false) -> void:
+	# compact and translucent while a zoomed play is live (it sits over the field)
+	var k := 0.72 if compact else 1.0
+	var h := 56.0 * k
+	var bw := 96.0 * k
+	var sw := 96.0 * k
+	var mw := 168.0 * k
 	var w := (bw + sw) * 2.0 + mw
 	var mid_x := scoreboard_x()
 	var x0 := mid_x - w * 0.5
-	var y0 := BAR_H + 10.0
+	var y0 := BAR_H + (8.0 if compact else 10.0)
 	var r := h * 0.5
 	var away := team_color(2)
 	var home := team_color(1)
-	occluders.append([x0, y0, x0 + w, y0 + h + 26.0])
+	occluders.append([x0, y0, x0 + w, y0 + h + 26.0 * k])
 	dl.art("scoreboard", x0, y0, w, h, {"W": w, "H": h, "R": r, "BW": bw, "BW2": bw + r,
 		"XR": w - bw - r, "MW": w - 2.0 * bw, "W1": w - 2.0, "H1": h - 2.0, "left": away,
-		"right": home, "SL": bw + sw, "SR": w - bw - sw, "SY": 12.0, "SH": h - 24.0})
+		"right": home, "SL": bw + sw, "SR": w - bw - sw, "SY": 12.0 * k, "SH": h - 24.0 * k,
+		"op": 0.86 if compact else 1.0})
 	var mid := y0 + h * 0.5
 	var on_away := team_text(2)
 	var on_home := team_text(1)
-	dl.text_mid(x0 + bw * 0.5 + 6.0, mid, team_code(gs, 2), 22.0, on_away, "c", true)
-	dl.text_mid(x0 + w - bw * 0.5 - 6.0, mid, team_code(gs, 1), 22.0, on_home, "c", true)
-	dl.text_mid(x0 + bw + sw * 0.5 + 8.0, mid, str(gs.score_away), 28.0, UiTheme.TEXT, "c", true)
-	dl.text_mid(x0 + w - bw - sw * 0.5 - 8.0, mid, str(gs.score_home), 28.0, UiTheme.TEXT, "c", true)
+	dl.text_mid(x0 + bw * 0.5 + 6.0 * k, mid, team_code(gs, 2), 22.0 * k, on_away, "c", true)
+	dl.text_mid(x0 + w - bw * 0.5 - 6.0 * k, mid, team_code(gs, 1), 22.0 * k, on_home, "c", true)
+	dl.text_mid(x0 + bw + sw * 0.5 + 8.0 * k, mid, str(gs.score_away), 28.0 * k, UiTheme.TEXT, "c",
+		true)
+	dl.text_mid(x0 + w - bw - sw * 0.5 - 8.0 * k, mid, str(gs.score_home), 28.0 * k, UiTheme.TEXT,
+		"c", true)
 	var q := quarter_label(gs.quarter)
-	dl.text_mid(x0 + w * 0.5, mid - 10.0, q, 13.0, UiTheme.TEXT_3, "c", true)
-	dl.text_mid(x0 + w * 0.5, mid + 9.0, gs.clock_text, 22.0, UiTheme.TEXT, "c", true)
+	dl.text_mid(x0 + w * 0.5, mid - 10.0 * k, q, 13.0 * k, UiTheme.TEXT_3, "c", true)
+	dl.text_mid(x0 + w * 0.5, mid + 9.0 * k, gs.clock_text, 22.0 * k, UiTheme.TEXT, "c", true)
 	# possession: a small ball next to the score of the team with the ball
 	if gs.poss == 2 or gs.poss == 1:
-		var px := x0 + bw + 17.0 if gs.poss == 2 else x0 + w - bw - 17.0
-		var bw2 := 22.0
+		var px := x0 + bw + 17.0 * k if gs.poss == 2 else x0 + w - bw - 17.0 * k
+		var bw2 := 22.0 * k
 		dl.art("ball", px - bw2 * 0.5, mid - bw2 * 13.0 / 40.0, bw2, bw2 * 26.0 / 40.0)
 	# time-outs: three dots under each team block
-	_timeouts(dl, x0 + bw * 0.5 + 6.0, y0 + h - 9.0, gs.timeouts_away, on_away)
-	_timeouts(dl, x0 + w - bw * 0.5 - 6.0, y0 + h - 9.0, gs.timeouts_home, on_home)
+	_timeouts(dl, x0 + bw * 0.5 + 6.0 * k, y0 + h - 9.0 * k, gs.timeouts_away, on_away)
+	_timeouts(dl, x0 + w - bw * 0.5 - 6.0 * k, y0 + h - 9.0 * k, gs.timeouts_home, on_home)
 	# down & distance tab under the pill
 	var dd := down_distance(gs)
 	if dd != "":
-		var tw := dl.measure(dd, 15.0, true) + 36.0
+		var fz := 15.0 * k
+		var tw := dl.measure(dd, fz, true) + 36.0 * k
 		var ty := y0 + h - 4.0
-		dl.rrect(mid_x - tw * 0.5, ty, tw, 30.0, 10.0, "#121821", 1.0, "#ffffff1a")
-		dl.rect(mid_x - tw * 0.5 + 1.0, ty + 1.0, tw - 2.0, 10.0, "#121821")
-		dl.text_mid(mid_x, ty + 16.0, dd, 15.0, UiTheme.WARN, "c", true)
+		var bg := "#121821dc" if compact else "#121821"
+		dl.rrect(mid_x - tw * 0.5, ty, tw, 30.0 * k, 10.0 * k, bg, 1.0, "#ffffff1a")
+		dl.rect(mid_x - tw * 0.5 + 1.0, ty + 1.0, tw - 2.0, 6.0, bg)
+		dl.text_mid(mid_x, ty + 16.0 * k, dd, fz, UiTheme.WARN, "c", true)
 
 
 ## Centre x of the scoreboard: the screen centre, or the left column when the

@@ -24,6 +24,7 @@ class Program:
     def __init__(self, exe_path, base=LOAD_SEG):
         self.exe = NflExe(exe_path)
         self.exe_path = exe_path
+        self.kind = "exe"
         self.base = base
         e = self.exe
         self.root = bytes(apply_relocs(e.image, e.relocs, 0, base))
@@ -47,6 +48,10 @@ class Program:
         self.thunk_at = {(t["cs"], t["ip"]): t for t in self.thunks}
         self.ovl_region = (self.ovl[1]["start"], self.ovl[12]["end"])
         self.dgroup_seg = e.overlays[11].seg_start + base
+        rt = 0x13F3 + base
+        # the C runtime's switch helpers with inline tables (see analysis.py)
+        self.switch_helpers = {"dense": (rt, 0x00E7), "sparse": (rt, 0x07DC)}
+        self.switch_sites = {(rt, 0x00FD), (rt, 0x07FA)}
 
     # units --------------------------------------------------------------
     def family(self, unit):
@@ -95,3 +100,53 @@ class Program:
     def word(self, unit, lin):
         r = self.reader(unit)
         return r(lin) | (r(lin + 1) << 8)
+
+
+class ComProgram:
+    """A .COM program (SEASON.COM): one segment, loaded at PSP:0100 with the
+    same fixed PSP the host's DOS uses, so CS = DS = ES = SS = 0112h."""
+    kind = "com"
+
+    def __init__(self, path, psp=PSP_SEG):
+        with open(path, "rb") as f:
+            self.data = f.read()
+        self.exe_path = path
+        self.base = psp
+        self.cs = psp
+        self.root = self.data
+        self.root_lin = (psp << 4) + 0x100
+        self.root_end = self.root_lin + len(self.data)
+        self.ovl = {}
+        self.thunks = []
+        self.thunk_at = {}
+        self.mgr_seg = None
+        self.table_seg = None
+        self.switch_helpers = {}
+        self.switch_sites = set()
+
+    def family(self, unit):
+        return []
+
+    def reader(self, unit):
+        data, lo, hi = self.data, self.root_lin, self.root_end
+
+        def read(lin):
+            if lo <= lin < hi:
+                return data[lin - lo]
+            raise IndexError("no code byte at %05X" % lin)
+        return read
+
+    def unit_of(self, lin, from_unit):
+        return "root"
+
+    def candidates(self, lin):
+        return []
+
+
+def load_program(path):
+    """Program or ComProgram by file type."""
+    with open(path, "rb") as f:
+        sig = f.read(2)
+    if sig in (b"MZ", b"ZM"):
+        return Program(path)
+    return ComProgram(path)

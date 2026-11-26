@@ -698,3 +698,55 @@ def _file_as_string(path):
 
 
 FileAccess.get_file_as_string = staticmethod(_file_as_string)
+
+
+class Thread:
+    """Godot Thread on threading.Thread."""
+
+    def __init__(self):
+        self._t = None
+
+    def start(self, fn, priority=1):
+        import threading
+        f = fn if callable(fn) else fn.call
+        self._t = threading.Thread(target=f, daemon=True)
+        self._t.start()
+        return OK
+
+    def is_alive(self):
+        return self._t is not None and self._t.is_alive()
+
+    def wait_to_finish(self):
+        if self._t is not None:
+            self._t.join()
+
+
+class Image:
+    """The few Image calls the smoke mode uses (RGB8 -> PNG)."""
+    FORMAT_RGB8 = 4
+
+    def __init__(self, w=0, h=0, data=b""):
+        self.w, self.h, self.data = w, h, bytes(data)
+
+    @staticmethod
+    def create_from_data(w, h, mipmaps, fmt, data):
+        return Image(w, h, data)
+
+    def get_width(self):
+        return self.w
+
+    def get_height(self):
+        return self.h
+
+    def save_png(self, path):
+        import struct
+        import zlib
+        raw = b"".join(b"\0" + self.data[y * self.w * 3:(y + 1) * self.w * 3] for y in range(self.h))
+
+        def chunk(tag, body):
+            return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body))
+        png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", self.w, self.h, 8, 2, 0, 0, 0))
+               + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+        with open(globalize(path), "wb") as f:
+            f.write(png)
+        return OK

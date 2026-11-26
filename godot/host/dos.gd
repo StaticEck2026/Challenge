@@ -325,6 +325,23 @@ func install_program(blob: ProgramBlob, tail: String = "") -> Dictionary:
 	mcb_write(prog_mcb, 0x5A, p, MEM_TOP - p)
 	mcb_write(FIRST_MCB, 0x4D, p, env_paras)
 	psp = p
+	if blob.kind == "com":
+		mcb_write(prog_mcb, 0x5A, p, MEM_TOP - p)
+		build_psp(p, ENV_SEG, tail, MEM_TOP)
+		var ca := (p << 4) + 0x100
+		for i in range(blob.image.size()):
+			cpu.mem[ca + i] = blob.image[i]
+		for i in range(4):
+			cpu.sr[i] = p
+		cpu.ip = 0x100
+		cpu.r[4] = 0xFFFE
+		m.ww((p << 4) + 0xFFFE, 0)
+		load_info = {"psp": p, "com_size": blob.image.size(), "sha1": blob.sha1}
+		if p != blob.load_seg:
+			m.log_msg("[dos] program translated for PSP %04X, loader picked %04X" % [blob.load_seg, p])
+			return {}
+		_set_entry_regs(p)
+		return load_info
 	var load_seg := p + 0x10
 	if load_seg != blob.load_seg:
 		m.log_msg("[dos] program image is relocated for %04X, loader picked %04X"
@@ -352,6 +369,12 @@ func install_program(blob: ProgramBlob, tail: String = "") -> Dictionary:
 		"cs": blob.cs, "ip": blob.ip, "ss": blob.ss, "sp": blob.sp, "minalloc": blob.minalloc,
 		"maxalloc": blob.maxalloc, "overlay_bytes": blob.exe_size - blob.ovl_off,
 		"sha1": blob.sha1}
+	_set_entry_regs(p)
+	return load_info
+
+
+## Registers DOS leaves for a freshly loaded program (as the oracle's loader).
+func _set_entry_regs(p: int) -> void:
 	dta = [p, 0x80]
 	cpu.r[0] = 0
 	cpu.r[3] = 0
@@ -361,7 +384,6 @@ func install_program(blob: ProgramBlob, tail: String = "") -> Dictionary:
 	cpu.r[7] = cpu.r[4]
 	cpu.r[5] = 0x91C
 	cpu.iflag = 1
-	return load_info
 
 
 ## Virtual file entry for a DOS name (any drive/directory), or [].

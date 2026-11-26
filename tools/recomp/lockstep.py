@@ -50,15 +50,16 @@ sys.path.insert(0, HERE)
 import scripts  # noqa: E402
 
 HOST_FILES = ["cpu_state.gd", "machine.gd", "bios.gd", "dos.gd", "video.gd", "font_cp437.gd",
-              "program_blob.gd", "mem_file.gd", "recomp_unit.gd", "recomp_host.gd"]
+              "program_blob.gd", "mem_file.gd", "recomp_unit.gd", "recomp_host.gd",
+              "key_script.gd", "smoke.gd"]
 
 
 def remove_exe(work):
-    """The recompiled side runs without the program file: delete every NFL.EXE."""
+    """The recompiled side runs without the program files: delete NFL.EXE and SEASON.COM."""
     gone = []
     for dp, dn, fn in os.walk(work):
         for f in fn:
-            if f.upper() == "NFL.EXE":
+            if f.upper() in ("NFL.EXE", "SEASON.COM"):
                 os.remove(os.path.join(dp, f))
                 gone.append(os.path.relpath(os.path.join(dp, f), work))
     return gone
@@ -73,6 +74,7 @@ def install(mod, gdos, recomp_dir, args):
 LOAD_SEG = 0x122
 MGR_CS = 0x191F + LOAD_SEG
 MEM_EVERY = 2000
+SEASON_FILE = [None]     # --season-nfl: SEASON.NFL to use instead of the built-in schedule
 STACK_SEG = 0x3832      # the program's stack segment (set by the C start-up)
 MGR_STACK = 0x2F21 + LOAD_SEG   # the overlay manager's private start-up stack (256 bytes)
 
@@ -199,9 +201,10 @@ def run_oracle(scenario, game_dir, k, max_services, log, snapshot=False):
     from run import Session, parse_keys
     from video import text_dump
     work = os.path.join(ROOT, "build", "recomp", "ls-oracle-" + scenario)
-    scripts.prepare_dir(game_dir, work, scenario)
+    scripts.prepare_dir(game_dir, work, scenario, season_file=SEASON_FILE[0])
     sc = scripts.SCENARIOS[scenario]
-    s = Session(work, "NFL.EXE", sc["args"], scripts.drives(work), "C", log=lambda m_: None, quiet=True)
+    s = Session(work, sc.get("program", "NFL.EXE"), sc["args"], scripts.drives(work), "C",
+                log=lambda m_: None, quiet=True)
     m = s.m
     cpu = m.cpu
     bios = s.bios
@@ -233,8 +236,14 @@ def run_oracle(scenario, game_dir, k, max_services, log, snapshot=False):
 
     frames = []
 
+    def timer_hooked():
+        return m.rw(0x20) != 0xE400 or m.rw(0x22) != 0xF000
+
     def do_tick():
-        bios.int08()
+        if timer_hooked():
+            st["irq0"] = True          # delivered at the next back-edge (see edge())
+        else:
+            bios.int08()
         st["ticks"] += 1
         ks.on_tick()
         pump()
@@ -251,6 +260,26 @@ def run_oracle(scenario, game_dir, k, max_services, log, snapshot=False):
         if st["polls"] >= k:
             st["polls"] = 0
             do_tick()
+
+    # back-edges: a taken backward jcc/loop/jcxz/jmp counts as a poll (the
+    # recompiled code counts the same back-edges, see gdgen.goto)
+    def edge():
+        sync()
+        if st.get("irq0") and cpu.iflag:
+            st["irq0"] = False
+            cpu.interrupt(8)
+
+    def wrap_branch(op):
+        f = cpu.ops[op]
+
+        def g(o):
+            ip0 = cpu.op_ip
+            f(o)
+            if cpu.ip <= ip0 and cpu.op_cs not in (0xF000, MGR_CS):
+                edge()
+        cpu.ops[op] = g
+    for op in list(range(0x70, 0x80)) + [0xE0, 0xE1, 0xE2, 0xE3, 0xE9, 0xEB]:
+        wrap_branch(op)
 
     orig_hle = m.hle
     orig_port_in = m.port_in
@@ -311,18 +340,33 @@ def collect_files(work):
     out = {}
     for dp, dn, fn in os.walk(work):
         for f in fn:
-            if f.upper() in ("STATS.LOG", "AVGSTATS.LOG", "CONFIG.NFL") or f.upper().startswith("GAME."):
+            if f.upper() in ("STATS.LOG", "AVGSTATS.LOG", "CONFIG.NFL", "SEASON.NFL", "CONFIG.SEA") \
+                    or f.upper().startswith("GAME."):
                 p = os.path.join(dp, f)
                 out[os.path.relpath(p, work)] = open(p, "rb").read()
     return out
 
 
 # -------------------------------------------------------------- recompiled
+def module_name(recomp_dir):
+    """Python module of a recompiled program: recomp_mod (NFL.EXE), recomp_<name>_mod."""
+    base = os.path.basename(os.path.normpath(recomp_dir))
+    return "recomp_mod" if base == "recomp" else "recomp_%s_mod" % base
+
+
+def recomp_dir_for(scenario):
+    prog = scripts.SCENARIOS[scenario].get("program", "NFL.EXE")
+    d = os.path.join(ROOT, "godot", "recomp")
+    if prog.upper().endswith(".COM"):
+        d = os.path.join(d, os.path.splitext(prog)[0].lower())
+    return d
+
+
 def transpile(recomp_dir, log):
     os.makedirs(OUT, exist_ok=True)
     host = [os.path.join(ROOT, "godot", "host", f) for f in HOST_FILES]
     gen = sorted(os.path.join(recomp_dir, f) for f in os.listdir(recomp_dir) if f.endswith(".gd"))
-    dst = os.path.join(OUT, "recomp_mod.py")
+    dst = os.path.join(OUT, module_name(recomp_dir) + ".py")
     srcs = host + gen
     stamp = hashlib.sha1()
     for p in srcs + [os.path.join(GDPORT, "gd2py.py")]:
@@ -365,10 +409,11 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, re
     from font_cp437 import FONT8
     from video import text_dump
     t0 = time.time()
-    mod = importlib.import_module("recomp_mod")
+    recomp_dir = recomp_dir or recomp_dir_for(scenario)
+    mod = importlib.import_module(module_name(recomp_dir))
     log("[recomp] module imported in %.1fs" % (time.time() - t0))
     work = os.path.join(ROOT, "build", "recomp", "ls-recomp-" + scenario)
-    scripts.prepare_dir(game_dir, work, scenario)
+    scripts.prepare_dir(game_dir, work, scenario, season_file=SEASON_FILE[0])
     log("[recomp] removed from the run directory: %s" % remove_exe(work))
     sc = scripts.SCENARIOS[scenario]
     gm = mod.Machine()
@@ -379,7 +424,7 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, re
     gb = mod.BIOS(gm, bytearray(FONT8), "", mod.BIOS.DEFAULT_EPOCH, 12 * 3600)
     dr = scripts.drives(work)
     gdos = mod.DOS(gm, gb, {d: [p, ""] for d, p in dr.items()}, "C")
-    info = install(mod, gdos, recomp_dir or os.path.join(ROOT, "godot", "recomp"), sc["args"])
+    info = install(mod, gdos, recomp_dir, sc["args"])
     log("[recomp] installed from program.bin: %s" % info)
     host = mod.RecompHost()
     idx = mod.recomp_index()
@@ -426,6 +471,17 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, re
     def on_service(n):
         i = state["n"]
         state["n"] = i + 1
+        if i % 64 == 0:
+            # nesting of recompiled functions (the GDScript call depth on the
+            # program thread, see docs/RECOMPILATION.md "Godot limits")
+            fr = sys._getframe(1)
+            d = 0
+            while fr is not None:
+                if fr.f_code.co_name.startswith("f_"):
+                    d += 1
+                fr = fr.f_back
+            if d > state.get("depth", 0):
+                state["depth"] = d
         r, sr = cpu.r, cpu.sr
         mine = (n, "M", mgr_tuple(r, sr)) if is_mgr_call(cpu.mem, r, sr) else (n, "P", regs_tuple(r, sr, n))
         if trace is not None:
@@ -460,9 +516,10 @@ def run_recomp(scenario, game_dir, k, ref, log, max_services, snapshot=False, re
     if ui_stats is not None:
         log("[ui] Modern layer ran on %d ticks: %s" % (ui_stats["frames"], ui_stats["screens"]))
     log("[recomp] %s: %d service calls, %d ticks, %.1fs, exited=%s code=%s, actions %d/%d, %d dispatched calls, "
-        "%d dispatch misses, %d overlay loads" % (
+        "%d dispatch misses, %d overlay loads, %d timer interrupts, max nesting %d recompiled functions" % (
             scenario, state["n"], gm.ticks, dt, gm.exited, gm.exit_code, ks.ai, len(ks.actions),
-            host.calls_dispatched, host.dispatch_misses, host.ovl_loads))
+            host.calls_dispatched, host.dispatch_misses, host.ovl_loads, host.irqs_delivered,
+            state.get("depth", 0)))
     if logs:
         log("[recomp] host log: %s" % logs[:12])
     return res
@@ -508,7 +565,10 @@ def diff_at(a, n):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--game-dir", default=os.environ.get("NFL_GAME_DIR", ""))
-    ap.add_argument("--recomp-dir", default=os.path.join(ROOT, "godot", "recomp"))
+    ap.add_argument("--recomp-dir", default=None,
+                    help="default: godot/recomp (NFL.EXE) or godot/recomp/season (SEASON.COM)")
+    ap.add_argument("--season-nfl", help="SEASON.NFL for the season scenario (e.g. the one the "
+                                         "recompiled SEASON.COM wrote) instead of the built-in schedule")
     ap.add_argument("--polls-per-tick", type=int, default=64)
     ap.add_argument("--max-services", type=int, default=10 ** 9)
     ap.add_argument("--fresh-oracle", action="store_true", help="ignore a cached oracle trace")
@@ -519,6 +579,8 @@ def main():
                     help="debug: run both sides to service call N and list differing memory ranges")
     ap.add_argument("scenario", choices=list(scripts.SCENARIOS))
     a = ap.parse_args()
+    a.recomp_dir = a.recomp_dir or recomp_dir_for(a.scenario)
+    SEASON_FILE[0] = a.season_nfl
     if a.diff_at:
         return diff_at(a, a.diff_at)
 
@@ -526,8 +588,9 @@ def main():
         print(msg, flush=True)
     ref = None
     if not a.no_oracle:
-        cache = os.path.join(ROOT, "build", "recomp", "trace_%s_k%d_n%d.pkl" % (
-            a.scenario, a.polls_per_tick, min(a.max_services, 10 ** 9)))
+        cache = os.path.join(ROOT, "build", "recomp", "trace2_%s_k%d_n%d%s.pkl" % (
+            a.scenario, a.polls_per_tick, min(a.max_services, 10 ** 9),
+            "_sea" if a.season_nfl else ""))
         if os.path.exists(cache) and not a.fresh_oracle:
             ref = pickle.load(open(cache, "rb"))
             log("[oracle] cached trace %s: %d service calls (%.1fs when recorded)" % (

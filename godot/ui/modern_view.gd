@@ -57,7 +57,7 @@ var _interval: float = 0.12
 var _marker_prev: float = -100.0
 var _marker_cur: float = -100.0
 var _marker_since: float = 0.0
-var _camera: Array = []
+var _camera: Array = []         # zoom camera [centre fx, centre fy, scale], smoothed
 
 
 func _init() -> void:
@@ -98,14 +98,9 @@ func refresh(m: Machine, delta: float) -> void:
 	if state.play_active and _cur.size() == 22:
 		u["players"] = _blend(_prev, _cur)
 		if _ball_cur.size() == 2:
-			var b := _blend_one(_ball_prev, _ball_cur)
-			u["ball"] = b
-			# the zoom camera follows the ball, eased
-			if _camera.size() != 2 or absf(_camera[0] - b[0]) > 25.0:
-				_camera = [b[0], b[1]]
-			var k := clampf(delta * 4.0, 0.0, 1.0)
-			_camera = [lerpf(_camera[0], b[0], k), lerpf(_camera[1], b[1], k)]
-			u["camera"] = _camera
+			u["ball"] = _blend_one(_ball_prev, _ball_cur)
+		if u.get("zoom", false):
+			u["camera"] = _follow_camera(u, delta)
 	else:
 		_camera = []
 	if _marker_cur > -50.0:
@@ -151,6 +146,24 @@ func _animate(delta: float) -> void:
 				_marker_prev = state.ball_fx
 			_marker_cur = state.ball_fx
 			_marker_since = 0.0
+
+
+## The auto-framing zoom camera, eased towards the frame that fits all the
+## players and the ball (exponential smoothing, no overshoot), then corrected
+## so that nobody is ever outside the view.
+func _follow_camera(u: Dictionary, delta: float) -> Array:
+	var mv := screens.match_view
+	mv.vertical = str(u.get("field", "horizontal")) == "vertical"
+	var pts := MatchView.framed_points(state, u)
+	var target := mv.frame_camera(pts)
+	if _camera.size() != 3:
+		_camera = target
+	else:
+		var k := 1.0 - exp(-delta * MatchView.CAMERA_RATE)
+		_camera = [lerpf(_camera[0], target[0], k), lerpf(_camera[1], target[1], k),
+			lerpf(_camera[2], target[2], k)]
+	_camera = mv.contain_camera(_camera, pts)
+	return _camera
 
 
 static func _far(a: Array, b: Array) -> bool:
@@ -316,6 +329,9 @@ func _gui_input(event: InputEvent) -> void:
 			var action := dl.hit(_logical(mb.position).x, _logical(mb.position).y)
 			if action.begins_with("key:"):
 				key_action.emit(action.substr(4))
+				accept_event()
+			elif action.begins_with("pad:"):
+				key_action.emit(action)    # a coach's keypad key, see main.gd
 				accept_event()
 			elif action.begins_with("ui:"):
 				ui_action.emit(action.substr(3))

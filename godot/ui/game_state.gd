@@ -62,6 +62,12 @@ var quarters_away: Array = []
 var timeouts_home: int = 3
 var timeouts_away: int = 3
 
+# ---- coaches: 1 human / 2 computer; keypad 1 right (numeric keypad), -1 left
+var coach_home: int = 2
+var coach_away: int = 2
+var keypad_home: int = 1
+var keypad_away: int = -1
+
 # ---- field
 var dir_home: int = 1
 var dir_away: int = -1
@@ -152,6 +158,10 @@ func update(mem: PackedByteArray) -> void:
 	if not map_ok:
 		return
 	_read_teams(mem)
+	coach_home = var16(mem, "coach_home")
+	coach_away = var16(mem, "coach_visitor")
+	keypad_home = var16(mem, "keypad_home")
+	keypad_away = var16(mem, "keypad_visitor")
 	dir_home = 1 if var16(mem, "dir_home") >= 0 else -1
 	dir_away = 1 if var16(mem, "dir_visitor") >= 0 else -1
 	if not graphics:
@@ -433,3 +443,25 @@ func short_name(team: int) -> String:
 func full_name(team: int) -> String:
 	var f := home_full if team == 1 else away_full
 	return f if f != "" else short_name(team)
+
+
+## The keyboard side ("L" or "R") of the coach a window belongs to: the team
+## named in its title, else the side of the screen it is on (the game opens
+## each coach's windows on his keyboard side).
+func coach_side(title: String, screen_side: int) -> String:
+	for team in [1, 2]:
+		var nm := short_name(team)
+		if nm != "" and title.contains(nm):
+			var kp := keypad_home if team == 1 else keypad_away
+			return "R" if kp > 0 else "L"
+	return "L" if screen_side == 0 else "R"
+
+
+## "Human" / "Computer" for the coach on keyboard side "L" or "R", or "".
+func coach_label(side: String) -> String:
+	for team in [1, 2]:
+		var kp := keypad_home if team == 1 else keypad_away
+		var c := coach_home if team == 1 else coach_away
+		if (kp > 0) == (side == "R") and (c == 1 or c == 2):
+			return "Human" if c == 1 else "Computer"
+	return ""

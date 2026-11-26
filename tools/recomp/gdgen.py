@@ -32,7 +32,6 @@ RID_SPILL = {i: "r[%d]" % i for i in range(8)}
 RID_SPILL.update({R_ES: "sg[0]", R_SS: "sg[2]", R_DS: "sg[3]"})
 CHUNK = 12
 COMMENTS = False
-POLL_EVERY = 4096
 ABORT = -1
 
 
@@ -177,6 +176,7 @@ class FuncGen:
 
     # ------------------------------------------------------------ calls
     def spill(self, regs=None, flags=0):
+        self.o("st.eb = pl")
         for rid in self.mentioned if regs is None else regs:
             self.o("%s = %s" % (RID_SPILL[rid], RID_NAME[rid]))
         for bit, n in FLAG_NAMES:
@@ -184,6 +184,7 @@ class FuncGen:
                 self.o("st.%s = %s" % (n, n))
 
     def reload(self, regs, flags):
+        self.o("pl = st.eb")
         for rid in self.mentioned:
             if rid in regs:
                 self.o("%s = %s" % (RID_NAME[rid], RID_SPILL[rid]))
@@ -251,7 +252,7 @@ class FuncGen:
         o("var t2: int = 0")
         o("var t3: int = 0")
         o("var t4: int = 0")
-        o("var pl: int = 0")
+        o("var pl: int = st.eb")
         o("var b: int = %s" % h(f.ip))
         self.lines.extend(body)
         self.ind = 1
@@ -291,23 +292,38 @@ class FuncGen:
         else:
             self.o("return host.fatal(%s, \"fell off block\")" % h((self.cs << 16) | bl.ip))
 
-    def goto(self, bl, target, force=False):
-        self.o("b = %s" % h(target))
-        if force and target > bl.ip:
-            self.o("continue")
+    def goto(self, bl, target, force=False, count=False):
+        """Jump to block `target`.  A backward conditional or direct jump
+        (count=True) is a *back-edge*: it spends one unit of the poll budget
+        `pl` (st.eb between functions); when the budget runs out the full
+        state is stored and host.edge_poll() runs: the clock, a hooked timer
+        interrupt, a stop request.  Multi-way jumps (switch, jmp reg) do not
+        count."""
+        o = self.o
+        if target not in self.f.blocks:
+            o("return host.fatal(%s, \"reached code the translator could not decode\")"
+              % h((self.cs << 16) | target))
+            return
+        o("b = %s" % h(target))
         if target <= bl.ip:
-            self.o("pl += 1")
-            self.o("if pl >= %d:" % POLL_EVERY)
-            self.o("\tpl = 0")
-            self.o("\tif host.poll():")
-            self.o("\t\treturn %d" % ABORT)
-            self.o("continue")
+            if count:
+                o("pl -= 1")
+                o("if pl <= 0:")
+                self.ind += 1
+                self.spill(None, ALL)
+                o("if host.edge_poll(%s) < 0:" % h((self.cs << 16) | target))
+                o("\treturn %d" % ABORT)
+                self.reload(ALL_REGS, ALL)
+                self.ind -= 1
+            o("continue")
+        elif force:
+            o("continue")
 
     def branch(self, bl, ins, cond):
         nip = ins.next_ip()
         self.o("if %s:" % cond)
         self.ind += 1
-        self.goto(bl, ins.target)
+        self.goto(bl, ins.target, count=True)
         self.ind -= 1
         self.o("else:")
         self.ind += 1
@@ -1104,10 +1120,12 @@ class FuncGen:
     def i_in(self, ins, la, bl):
         dst, port = ins.ops
         pe = h(port[1]) if port[0] == "i" else "dx"
+        self.o("st.eb = pl")
         if ins.w:
             self.o("ax = host.port_in(%s, 1) & 0xFFFF" % pe)
         else:
             self.o("ax = (ax & 0xFF00) | (host.port_in(%s, 0) & 0xFF)" % pe)
+        self.o("pl = st.eb")
 
     def i_out(self, ins, la, bl):
         port, src = ins.ops
@@ -1142,7 +1160,7 @@ class FuncGen:
         return True
 
     def i_jmp(self, ins, la, bl):
-        self.goto(bl, ins.target)
+        self.goto(bl, ins.target, count=True)
         return True
 
     def i_call(self, ins, la, bl):
@@ -1154,6 +1172,13 @@ class FuncGen:
         e, g = self.callee_expr(ck)
         if e is None:
             e = "host.dispatch(%s)" % h((self.cs << 16) | ins.target)
+        if ins.ext == "pstr":
+            # the callee consumes the inline Pascal string after the CALL and
+            # returns past it
+            cont = self.f.cont[ins.ip]
+            self.emit_call(ins, la, (self.cs << 16) | cont, e, g)
+            self.goto(bl, cont)
+            return True
         self.emit_call(ins, la, (self.cs << 16) | nip, e, g)
 
     def push_far_ret(self, nip):
@@ -1316,6 +1341,11 @@ class FuncGen:
     def i_jmpind(self, ins, la, bl):
         v = self.rd(ins.ops[0])
         self.o("t2 = %s" % v)
+        if ins.ext == "jmpret":
+            # the helper popped its return address and jumps to it: a return
+            self.spill(None, self.f.fout)
+            self.o("return %s | t2" % h(self.cs << 16))
+            return True
         tg = self.f.dyn.get(ins.ip, [])
         intra = sorted({t[1] for t in tg if t[0] == self.cs})
         first = True

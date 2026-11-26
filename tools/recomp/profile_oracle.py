@@ -40,8 +40,13 @@ MGR_SEG = 0x191F + LOAD_SEG
 NOVL = 12
 
 
+COM_MODE = [False]
+
+
 def resident_key(mem):
     """Tuple of overlay numbers whose 'loaded' bit is set in the PLINK86 table."""
+    if COM_MODE[0]:
+        return ()
     t = TABLE_SEG << 4
     out = []
     for n in range(1, NOVL + 1):
@@ -57,7 +62,9 @@ class Profiler:
         self.cpu = session.m.cpu
         self.cov = {}            # variant key -> set(lin)
         self.xfers = {}          # (kind, site_cs, site_ip, tgt_cs, tgt_ip, variant) -> count
-        self.shadow = []
+        self.shadow = []         # (ret_cs, ret_ip, callee_cs, callee_ip)
+        self.inline = {}         # ("ret"|"pstr", callee_cs, callee_ip) -> count
+        self.skips = {}          # (cs, ip after the CALL) -> where the callee returned
         self.variant = ()
         self.cur_cov = self.cov.setdefault(self.variant, set())
         self._install()
@@ -73,6 +80,38 @@ class Profiler:
         key = (kind, cpu.op_cs, cpu.op_ip, tcs, tip, self.variant)
         self.xfers[key] = self.xfers.get(key, 0) + 1
 
+    def returned_to(self, tcs, tip, kind):
+        """A RET or indirect JMP went to (tcs, tip). If the innermost call on
+        the shadow stack expects that address, or the address just past an
+        inline Pascal string at the expected address (Turbo Pascal passes
+        string constants inline after the CALL), it is that call's return.
+        Logs it and pops the call.  Returns True if it was."""
+        sh = self.shadow
+        if not sh:
+            return False
+        rcs, rip, ccs, cip = sh[-1]
+        if rcs != tcs:
+            return False
+        if tip == rip:
+            if kind != "ret":
+                self.log("jmpret", tcs, tip)
+                self.inline[("ret", ccs, cip)] = self.inline.get(("ret", ccs, cip), 0) + 1
+            sh.pop()
+            return True
+        lin = ((rcs << 4) + rip) & 0xFFFFF
+        if tip == (rip + 1 + self.cpu.mem[lin]) & 0xFFFF:
+            self.log("%s-pstr" % kind, tcs, tip)
+            self.inline[("pstr", ccs, cip)] = self.inline.get(("pstr", ccs, cip), 0) + 1
+            sh.pop()
+            return True
+        if 0 < ((tip - rip) & 0xFFFF) < 256:
+            # returns past other inline data after this particular CALL
+            self.log("%s-skip" % kind, tcs, tip)
+            self.skips[(rcs, rip)] = tip
+            sh.pop()
+            return True
+        return False
+
     def _install(self):
         cpu = self.cpu
         ops = cpu.ops
@@ -85,14 +124,16 @@ class Profiler:
                 orig[op](o)
                 tgt = (cpu.sr[1], cpu.ip)
                 sh = prof.shadow
-                if sh and sh[-1] == tgt:
+                if sh and sh[-1][:2] == tgt:
                     sh.pop()
                     return
                 if cpu.op_cs == MGR_SEG:
                     prof.refresh_variant()
+                if kind == "ret" and prof.returned_to(tgt[0], tgt[1], "ret"):
+                    return
                 # resynchronise (longjmp-like unwinding)
                 for i in range(len(sh) - 1, -1, -1):
-                    if sh[i] == tgt:
+                    if sh[i][:2] == tgt:
                         prof.log(kind + "-unwind%d" % (len(sh) - i - 1), tgt[0], tgt[1])
                         del sh[i:]
                         break
@@ -108,14 +149,14 @@ class Profiler:
             ret_ip = (cpu.ip + 2) & 0xFFFF
             orig[0xE8](o)
             if cpu.ip != ret_ip:        # 'call $+3 / pop reg' is not a call
-                sh.append((cpu.sr[1], ret_ip))
+                sh.append((cpu.sr[1], ret_ip, cpu.sr[1], cpu.ip))
             if len(sh) > 4096:
                 del sh[:2048]
 
         def call_far(o):
             ret = (cpu.sr[1], (cpu.ip + 4) & 0xFFFF)
             orig[0x9A](o)
-            prof.shadow.append(ret)
+            prof.shadow.append(ret + (cpu.sr[1], cpu.ip))
 
         def grp5(o):
             mem = cpu.mem
@@ -124,6 +165,8 @@ class Profiler:
             sub = (m >> 3) & 7
             sp0 = cpu.r[4]
             orig[0xFF](o)
+            if sub == 4 and prof.returned_to(cpu.sr[1], cpu.ip, "jmp"):
+                return
             if sub in (2, 3, 4, 5):
                 kind = {2: "callind", 3: "callfarind", 4: "jmpind", 5: "jmpfarind"}[sub]
                 prof.log(kind, cpu.sr[1], cpu.ip)
@@ -132,13 +175,15 @@ class Profiler:
                     a = (cpu.sr[2] << 4) + cpu.r[4]
                     rip = mem[a] | (mem[a + 1] << 8)
                     rcs = cs if sub == 2 else (mem[a + 2] | (mem[a + 3] << 8))
-                    prof.shadow.append((rcs, rip))
+                    prof.shadow.append((rcs, rip, cpu.sr[1], cpu.ip))
             del sp0
 
         def interrupt(n):
             ret = (cpu.sr[1], cpu.ip)
             orig_interrupt(n)
-            prof.shadow.append(ret)
+            prof.shadow.append(ret + (cpu.sr[1], cpu.ip))
+            if cpu.sr[1] != 0xF000:          # an interrupt handler the program installed
+                prof.log("irq%02X" % n, cpu.sr[1], cpu.ip)
 
         ops[0xE8] = call_near
         ops[0x9A] = call_far
@@ -183,7 +228,11 @@ class Profiler:
             xf.append({"kind": kind, "site": "%04X:%04X" % (scs, sip), "target": "%04X:%04X" % (tcs, tip),
                        "variant": list(var), "count": cnt})
         cov = {",".join(str(x) for x in k): compress(sorted(v)) for k, v in self.cov.items() if v}
-        data = {"load_seg": "%04X" % LOAD_SEG, "transfers": xf, "coverage": cov}
+        inl = [{"kind": k, "callee": "%04X:%04X" % (c, i), "count": n}
+               for (k, c, i), n in sorted(self.inline.items())]
+        inl += [{"kind": "skip", "site": "%04X:%04X" % k, "target": "%04X:%04X" % (k[0], v)}
+                for k, v in sorted(self.skips.items())]
+        data = {"load_seg": "%04X" % LOAD_SEG, "transfers": xf, "coverage": cov, "returns": inl}
         data.update(extra)
         with open(path, "w") as f:
             json.dump(data, f, indent=0)
@@ -203,8 +252,9 @@ def run_scenario(name, game_dir, out_dir, budget_minstr, log):
     work = os.path.join(ROOT, "build", "recomp", "prof-" + name)
     scripts.prepare_dir(game_dir, work, name)
     sc = scripts.SCENARIOS[name]
+    COM_MODE[0] = sc.get("program", "NFL.EXE").upper().endswith(".COM")
     drives = scripts.drives(work)
-    s = Session(work, "NFL.EXE", sc["args"], drives, "C", log=log, quiet=True,
+    s = Session(work, sc.get("program", "NFL.EXE"), sc["args"], drives, "C", log=log, quiet=True,
                 shots=os.path.join(out_dir, "shots-" + name))
     prof = Profiler(s)
     s.actions = parse_keys(sc["keys"])
@@ -225,12 +275,17 @@ def export(paths, out):
     """Merge scenario profiles into the compact translator input (tools/recomp/profile.json):
     only the transfers the translator uses, without counts."""
     keep = {}
+    rets = {}
     for p in paths:
-        for t in json.load(open(p))["transfers"]:
+        d = json.load(open(p))
+        for r in d.get("returns", []):
+            rets[tuple(sorted(r.items()))] = 1
+        for t in d["transfers"]:
             kind = t["kind"]
             if t["site"].startswith("%04X:" % MGR_SEG):
                 continue                      # native overlay manager
-            if kind in ("jmpind", "callind", "callfarind", "jmpfarind"):
+            if kind in ("jmpind", "callind", "callfarind", "jmpfarind", "jmpret", "jmp-pstr", "jmp-skip") \
+                    or kind.startswith("irq"):
                 pass
             elif "unwind" in kind:
                 kind = "unwind"               # only the site matters
@@ -243,12 +298,13 @@ def export(paths, out):
             else:
                 continue
             keep[(kind, t["site"], t["target"], tuple(t["variant"]))] = 1
-    data = {"_doc": "Dynamic control transfers of NFL.EXE v2.01 observed in the Python oracle by "
+    data = {"_doc": "Dynamic control transfers observed in the Python oracle by "
                     "tools/recomp/profile_oracle.py (runtime segments, load segment 0122h). "
                     "Addresses only; regenerate with --export.",
             "sources": [os.path.basename(p) for p in paths],
             "transfers": [{"kind": k[0], "site": k[1], "target": k[2], "variant": list(k[3])}
-                          for k in sorted(keep)]}
+                          for k in sorted(keep)],
+            "returns": [dict(k) for k in sorted(rets)]}
     with open(out, "w") as f:
         json.dump(data, f, indent=0)
     print("wrote %s: %d transfers" % (out, len(keep)))

@@ -45,14 +45,20 @@ Disassembly listings, screenshots and run directories are generated into
 
 ## Quick start
 
-**Godot:** recompile your `NFL.EXE` once:
+**Godot:** recompile your game folder once (both `NFL.EXE` and `SEASON.COM`):
 
 ```sh
-python3 tools/recomp/recompile.py /path/to/nfl/NFL.EXE --bundle-data   # writes godot/recomp/ (about 2 s)
+python3 tools/recomp/recompile.py /path/to/nfl --bundle-data   # writes godot/recomp/ (about 2 s)
+tools/godot_check.sh                                           # optional: official Godot 4.3, headless checks
 ```
 
-This writes the generated scripts, `program.bin` (the baked program image) and
-`game/` (a copy of the data files). After that the game needs no `NFL.EXE`.
+This writes the generated scripts, `program.bin` (the baked program image),
+`season/` (SEASON.COM, run with `-- --program=season`) and `game/` (a copy of
+the data files). After that the game needs no `NFL.EXE` or `SEASON.COM`.
+`tools/godot_check.sh` downloads and verifies the official Godot 4.3 binary,
+imports the project, compiles every script and runs the headless smoke tests.
+Notes for Windows and macOS are in `godot/README.md`, under "Check it in
+Godot".
 Without `--bundle-data`, put the data files (`A`..`Q`, `LEAGUE.NFL`, `89/`)
 into `godot/dos_c/` or pick their folder in the app. Then open `godot/` in the
 Godot 4.3+ editor and press Play. Game flags go
@@ -62,7 +68,9 @@ after `--`, for example `godot --path godot -- --args=/i`.
 
 ```sh
 G=/path/to/your/nfl          # folder containing NFL.EXE
+python3 -I tools/recomp/lockstep.py --game-dir $G seasoncom # recompiled SEASON.COM vs oracle -> season.nfl
 python3 -I tools/recomp/lockstep.py --game-dir $G season    # recompiled GDScript vs oracle, /s game
+python3 -I tools/recomp/smoke_test.py                        # main.gd's --smoke mode, through gd2py
 python3 -I tools/refemu/test_cpu.py                          # 87 CPU tests
 python3 -I tools/refemu/scenarios.py --game-dir $G season    # SEASON.COM + full CPU-vs-CPU game -> stats.log
 python3 -I tools/refemu/scenarios.py --game-dir $G boot replay
@@ -85,14 +93,18 @@ python3 -I tools/recomp/lockstep.py --game-dir $G --with-ui season   # lockstep 
   in lockstep with the oracle under a shared deterministic clock; see
   `docs/EMULATION_NOTES.md`):
   - 100% of the instructions the oracle executed are covered by translated
-    code, with zero dispatch misses.
-  - A complete `/s` season game matches the oracle at all 728,068 service
-    calls and 364 memory checkpoints, and writes a **byte-identical
-    `STATS.LOG`**. It runs 5x faster than the interpreter (49 s against 246 s).
+    code, for both NFL.EXE and SEASON.COM, with zero dispatch misses.
+  - Recompiled **SEASON.COM** (Turbo Pascal 3.0) matches the oracle at all
+    8,380 service calls and on 5 screens, and writes a byte-identical
+    `season.nfl`. A complete `/s` game on that schedule matches at all 76,782
+    service calls, 38 memory checkpoints and 1,265 graphics-mode ticks, and
+    writes a **byte-identical `STATS.LOG`**, 6.8x faster than the interpreter.
+    The test clock counts loop back-edges as polls, so these numbers differ
+    from earlier runs.
   - The boot scenario matches as well: the configuration dialog, team
     selection, roster load and 8,000 ticks of a game with instant replay, at
-    541,803 service calls. The CGA video memory is identical at every one of
-    the 4,137 ticks spent in graphics mode.
+    16,496 service calls. The CGA video memory is identical at every one of
+    the 4,904 ticks in graphics mode.
   - These runs delete `NFL.EXE` and set the program up from the baked
     `program.bin`.
   - Every `.gd` file passes `gdparse`, and `gdlint` with a relaxed config for
@@ -111,5 +123,7 @@ python3 -I tools/recomp/lockstep.py --game-dir $G --with-ui season   # lockstep 
   texture upload, audio, file dialog), `text_screen.gd`, the Modern view's
   Godot drawing (`ui/modern_view.gd`: SVG rasterisation, text, input), and
   GDScript speed.
-  The thread model was exercised with Python threads
-  (`tools/recomp/thread_smoke.py`). Expect small fixes on the first run.
+  The thread model and the `--smoke` self-test were exercised with Python
+  threads (`tools/recomp/thread_smoke.py`, `tools/recomp/smoke_test.py`).
+  `tools/godot_check.sh` runs these checks with the real engine on your
+  machine.

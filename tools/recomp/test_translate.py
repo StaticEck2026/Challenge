@@ -203,6 +203,9 @@ class FakeProg:
         self.root_lin = CODE_SEG << 4
         self.root_end = (CODE_SEG << 4) + 0x10000
         self.thunk_at = {}
+        self.switch_helpers = {}
+        self.switch_sites = set()
+        self.kind = "com"
         self.mgr_seg = 0xFFFF
         self.ovl = {}
 
@@ -267,6 +270,10 @@ def main():
 
         def poll(self):
             return False
+
+        def edge_poll(self, t):
+            self.st.eb = 7           # small budget: exercises the spill/reload path
+            return 0
 
         def fatal(self, t, msg):
             raise RuntimeError(msg)

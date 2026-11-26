@@ -29,6 +29,9 @@ var iflag: int = 0
 var df: int = 0
 var of: int = 0
 var halted: bool = false
+## Poll budget of the recompiled code: back-edges it may take before it must
+## call host.edge_poll() (see Machine.new_budget()).
+var eb: int = 1
 ## Service calls made so far (the deterministic clock and the logs use it).
 var icount: int = 0
 var executed: int = 0

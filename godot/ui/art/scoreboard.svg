@@ -1,7 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="{{W}}" height="{{H}}" viewBox="0 0 {{W}} {{H}}">
   <!-- Modern view: scoreboard pill. Team blocks in {{left}} / {{right}};
        {{BW}} = block width, {{R}} = corner radius (H/2), {{XR}} = W - BW.
-       Text (codes, scores, quarter, clock) is drawn on top by the view. -->
+       Text (codes, scores, quarter, clock) is drawn on top by the view.
+       {{op}} = opacity (translucent during a zoomed play). -->
+  <g opacity="{{op}}">
   <rect x="0" y="2" width="{{W}}" height="{{H}}" rx="{{R}}" fill="#000000" opacity="0.35"/>
   <rect x="0" y="0" width="{{W}}" height="{{H}}" rx="{{R}}" fill="#121821"/>
   <rect x="0" y="0" width="{{BW2}}" height="{{H}}" rx="{{R}}" fill="{{left}}"/>
@@ -10,4 +12,5 @@
   <rect x="{{SL}}" y="{{SY}}" width="1.5" height="{{SH}}" fill="#ffffff" opacity="0.12"/>
   <rect x="{{SR}}" y="{{SY}}" width="1.5" height="{{SH}}" fill="#ffffff" opacity="0.12"/>
   <rect x="1" y="1" width="{{W1}}" height="{{H1}}" rx="{{R}}" fill="none" stroke="#ffffff" stroke-width="1.5" opacity="0.10"/>
+  </g>
 </svg>

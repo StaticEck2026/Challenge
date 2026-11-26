@@ -1,0 +1,1136 @@
+{
+"_doc": "Dynamic control transfers observed in the Python oracle by tools/recomp/profile_oracle.py (runtime segments, load segment 0122h). Addresses only; regenerate with --export.",
+"sources": [
+"profile_seasoncom.json"
+],
+"transfers": [
+{
+"kind": "callind",
+"site": "0112:0DA5",
+"target": "0112:0853",
+"variant": []
+},
+{
+"kind": "callind",
+"site": "0112:26BE",
+"target": "0112:086C",
+"variant": []
+},
+{
+"kind": "callind",
+"site": "0112:2864",
+"target": "0112:089F",
+"variant": []
+},
+{
+"kind": "irq08",
+"site": "0112:0222",
+"target": "0112:01C4",
+"variant": []
+},
+{
+"kind": "irq08",
+"site": "0112:0222",
+"target": "0112:01DB",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:448C",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:44A7",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:48EF",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:490A",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:4A0B",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:4A28",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:4B8C",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:11F9",
+"target": "0112:4CBD",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3961",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:39D0",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3A32",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3A8C",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3AE6",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3B3E",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3B6A",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3BC5",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3C13",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3C69",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3CC5",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3D1E",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3D77",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3DCE",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3E27",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:3E4B",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:42D4",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:42F1",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:430B",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4325",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4342",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:435C",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4393",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:43B0",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:43CD",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:43EA",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4407",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4424",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:44C6",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:44ED",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4B43",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4B6E",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4D6F",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4DC2",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4E18",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:4E47",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:520F",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:5229",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:5275",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:52C8",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:530D",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:5367",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:555A",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:5579",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:55B2",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:55C3",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:55D4",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:5609",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:561A",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:562B",
+"variant": []
+},
+{
+"kind": "jmp-pstr",
+"site": "0112:2973",
+"target": "0112:566B",
+"variant": []
+},
+{
+"kind": "jmp-skip",
+"site": "0112:0D0C",
+"target": "0112:2D9C",
+"variant": []
+},
+{
+"kind": "jmpfarind",
+"site": "0112:01D6",
+"target": "F000:E400",
+"variant": []
+},
+{
+"kind": "jmpfarind",
+"site": "0112:01E1",
+"target": "F000:E400",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:03B9",
+"target": "0112:3526",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:03B9",
+"target": "0112:353B",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0F12",
+"target": "0112:22DE",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:3176",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:31B1",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:4CEB",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:4F43",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:4F55",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:5044",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:50FE",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:0FB7",
+"target": "0112:5696",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:11E3",
+"target": "0112:4290",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:11E3",
+"target": "0112:48AF",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:11E3",
+"target": "0112:49B9",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:11E3",
+"target": "0112:4BFD",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:11E3",
+"target": "0112:4C32",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:1336",
+"target": "0112:4497",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:1336",
+"target": "0112:44AA",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:1336",
+"target": "0112:48FA",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:1336",
+"target": "0112:490D",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:1336",
+"target": "0112:4A16",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:1336",
+"target": "0112:4A2B",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:1336",
+"target": "0112:4B92",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2554",
+"target": "0112:325F",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2554",
+"target": "0112:328B",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2554",
+"target": "0112:50BF",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2554",
+"target": "0112:50D4",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:36A0",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:36BC",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3721",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:373D",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3759",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3775",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:379C",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:37B8",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:393C",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:39B3",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:39ED",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3A42",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3A9C",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3AF6",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3B4E",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3B7A",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3BD5",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3C23",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3C79",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3CD5",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3D2E",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3D87",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3DDE",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:3E37",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4288",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:42CA",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:42E4",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4301",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:431B",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4335",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4352",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4386",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:43A3",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:43C0",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:43DD",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:43FA",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4417",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4473",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:44C0",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:44E3",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4516",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:455C",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:48A7",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:48D2",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4950",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:49B1",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:49F0",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4B38",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4D53",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4D7F",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4DD2",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4E28",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4E6D",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:4EEB",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:51D3",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:521F",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:5285",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:52D8",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:532A",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:536D",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:5543",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:556A",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:55A1",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:55F8",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2566",
+"target": "0112:5645",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2583",
+"target": "0112:4BB6",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2583",
+"target": "0112:4BE3",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2583",
+"target": "0112:4C18",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2583",
+"target": "0112:5066",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2583",
+"target": "0112:5080",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2771",
+"target": "0112:3266",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2771",
+"target": "0112:3292",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2771",
+"target": "0112:50C6",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:2771",
+"target": "0112:50DB",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:4296",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:44B0",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:48B5",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:4913",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:49BF",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:4A31",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:4C03",
+"variant": []
+},
+{
+"kind": "jmpret",
+"site": "0112:295B",
+"target": "0112:4C38",
+"variant": []
+}
+],
+"returns": [
+{
+"callee": "0112:038D",
+"count": 22,
+"kind": "ret"
+},
+{
+"callee": "0112:0EE6",
+"count": 2,
+"kind": "ret"
+},
+{
+"callee": "0112:0F8F",
+"count": 8,
+"kind": "ret"
+},
+{
+"callee": "0112:11CC",
+"count": 32,
+"kind": "ret"
+},
+{
+"callee": "0112:11E5",
+"count": 8,
+"kind": "pstr"
+},
+{
+"callee": "0112:12FD",
+"count": 7,
+"kind": "ret"
+},
+{
+"callee": "0112:253B",
+"count": 10,
+"kind": "ret"
+},
+{
+"callee": "0112:2558",
+"count": 301,
+"kind": "ret"
+},
+{
+"callee": "0112:256A",
+"count": 5,
+"kind": "ret"
+},
+{
+"callee": "0112:2762",
+"count": 10,
+"kind": "ret"
+},
+{
+"callee": "0112:2926",
+"count": 35,
+"kind": "ret"
+},
+{
+"callee": "0112:295D",
+"count": 54,
+"kind": "pstr"
+},
+{
+"kind": "skip",
+"site": "0112:2D7F",
+"target": "0112:2D93"
+},
+{
+"kind": "skip",
+"site": "0112:2D98",
+"target": "0112:2D9C"
+}
+]
+}

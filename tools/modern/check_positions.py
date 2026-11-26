@@ -21,8 +21,9 @@ read from:
    disc inside the visible field area (not off the canvas or under the
    toolbar or strip); off-screen discs are counted per orientation and zoom,
    split into "across the width" and "along the length" (zoom only follows
-   the length, so only the latter is expected there), and discs whose
-   centre is under the scoreboard pill are counted too;
+   the length), and discs whose centre is under the scoreboard pill; the
+   zoom camera is the app's: eased once per tick towards the auto-framing
+   target, then contained (ModernView._follow_camera);
 3. ball spot: at the first frame of each play the ball must be within one
    yard of the line of scrimmage the text-mode scoreboard showed before the
    play ("Yard: 33", on the side of the field the overview's marker is on),
@@ -31,6 +32,7 @@ read from:
   python3 -I tools/modern/check_positions.py --game-dir /path/to/nfl [--ticks 6000]
 """
 import argparse
+import math
 import os
 import sys
 
@@ -127,7 +129,7 @@ def main():
         gs = ui.GameState()
         mv = ui.MatchView(ui.UiArt())
         vdl = ui.DrawList()
-        st = {"was_gfx": False, "marker_fx": None}
+        st = {"was_gfx": False, "marker_fx": None, "cam": {}}
 
         def tick(r):
             mem = r.mem
@@ -164,8 +166,23 @@ def main():
             total["vis_frames"] += 1
             for field in ("horizontal", "vertical"):
                 for zoom in (False, True):
-                    mv.build(vdl, gs, {"field": field, "zoom": zoom,
-                                       "camera": [gs.ball["fx"], gs.ball["fy"]]})
+                    u = {"field": field, "zoom": zoom}
+                    if zoom:
+                        # the app's camera: eased towards the auto-framing
+                        # target once per tick, then contained
+                        mv.vertical = field == "vertical"
+                        pts = ui.MatchView.framed_points(gs, {})
+                        target = mv.frame_camera(pts)
+                        cam = st["cam"].get(field)
+                        if first or cam is None:
+                            cam = target
+                        else:
+                            k = 1.0 - math.exp(-(1.0 / 18.2) * ui.MatchView.CAMERA_RATE)
+                            cam = [c + (t_ - c) * k for c, t_ in zip(cam, target)]
+                        cam = mv.contain_camera(cam, pts)
+                        st["cam"][field] = cam
+                        u["camera"] = cam
+                    mv.build(vdl, gs, u)
                     x0, y0, x1, y1 = mv.viewport
                     key = (field, "zoom" if zoom else "full")
                     c = total["vis"].setdefault(key, [0, 0, 0])
@@ -265,8 +282,7 @@ def main():
         print("[check] visibility %-10s %-4s: %d play frames x 22 discs, %d off-screen across the "
               "width, %d off-screen along the length, %d under the scoreboard pill"
               % (key[0], key[1], t["vis_frames"], c[0], c[1], c[2]))
-    vis_ok = all(c[0] == 0 for c in t["vis"].values()) and all(
-        c[1] == 0 for k, c in t["vis"].items() if k[1] == "full")
+    vis_ok = all(c == [0, 0, 0] for c in t["vis"].values())
     print("[check] yard lines: %d frames with lines, %d frames where a drawn line was not on a "
           "5-yard multiple of the view's scale" % (t["line_frames"], t["line_bad"]))
     print("[check] ball at the snap vs the line of scrimmage on the text scoreboard: %d plays, "

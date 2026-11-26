@@ -27,6 +27,8 @@ import scripts  # noqa: E402
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--game-dir", default=os.environ.get("NFL_GAME_DIR", ""))
+    ap.add_argument("--season-com", action="store_true",
+                    help="run the recompiled SEASON.COM (realtime clock, hooked timer interrupt)")
     ap.add_argument("--speed", type=float, default=4.0)
     ap.add_argument("--timeout", type=float, default=300.0)
     a = ap.parse_args()
@@ -35,8 +37,9 @@ def main():
     from font_cp437 import FONT8
     from run import parse_keys
     from video import text_dump
-    lockstep.transpile(os.path.join(ROOT, "godot", "recomp"), print)
-    mod = importlib.import_module("recomp_mod")
+    rdir = os.path.join(ROOT, "godot", "recomp", "season") if a.season_com else os.path.join(ROOT, "godot", "recomp")
+    lockstep.transpile(rdir, print)
+    mod = importlib.import_module(lockstep.module_name(rdir))
     work = os.path.join(ROOT, "build", "recomp", "thread-smoke")
     scripts.prepare_dir(a.game_dir, work, "boot")
     print("[main] removed: %s" % lockstep.remove_exe(work))
@@ -46,7 +49,7 @@ def main():
     gm.speed = a.speed
     gb = mod.BIOS(gm, bytearray(FONT8), "", mod.BIOS.DEFAULT_EPOCH, 12 * 3600)
     gdos = mod.DOS(gm, gb, {d: [p, ""] for d, p in scripts.drives(work).items()}, "C")
-    lockstep.install(mod, gdos, os.path.join(ROOT, "godot", "recomp"), "/i")
+    lockstep.install(mod, gdos, rdir, "" if a.season_com else "/i")
     host = mod.RecompHost()
 
     def program_thread():          # main.gd _program_thread()
@@ -64,7 +67,8 @@ def main():
             return getattr(gm, n)
     view = View()
     # main thread: 60 Hz frames; keys from the scenario script, triggered by screen text
-    actions = parse_keys(scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Loading the team roster}{when:Timeouts}")
+    actions = parse_keys(scripts.SEASONCOM_KEYS if a.season_com else
+                         scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Loading the team roster}{when:Timeouts}")
     ai = 0
     frames = 0
     seen = []
@@ -83,7 +87,12 @@ def main():
         else:
             ai += 1
         time.sleep(1 / 60)
-    ok = ai == len(actions)
+    if a.season_com:
+        th.join(30)              # Esc: SEASON.COM writes season.nfl and exits
+        sea = os.path.join(work, "89", "SEASON.NFL")
+        print("[main] SEASON.COM exited=%s, season.nfl=%r, timer interrupts delivered: %d" % (
+            gm.exited, open(sea, "rb").read() if os.path.exists(sea) else None, host.irqs_delivered))
+    ok = ai == len(actions) and (not a.season_com or gm.exited)
     for v, t, tk in seen:
         print("[main] %-26r on screen after %5.1fs (BIOS ticks %d)" % (v, t, tk))
     t1 = time.time()

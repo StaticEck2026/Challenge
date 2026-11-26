@@ -226,6 +226,23 @@ Rerun this way, without the EXE:
 * `thread_smoke.py --game-dir godot/recomp/game`: passes from the
   `--bundle-data` folder alone.
 
+**SEASON.COM and the back-edge clock** (later). SEASON.COM, a Turbo Pascal
+3.0 program, is recompiled too. See "SEASON.COM" in
+`docs/RECOMPILATION.md`: returns by jump, inline string arguments, and a hooked
+INT 08h for `Delay` calibration. Since then the deterministic clock also
+counts loop back-edges, and hooked timer interrupts are delivered at
+back-edges. Results with this clock, all PASS, with both program files
+deleted on the recompiled side:
+
+| Scenario | Service calls compared | Files |
+|----------|------------------------|-------|
+| `lockstep.py seasoncom` | 8,380 | `SEASON.NFL` and `CONFIG.SEA` byte-identical; 3 timer interrupts delivered |
+| `lockstep.py season --season-nfl <the recompiled SEASON.COM's output>` | 76,782 | `STATS.LOG` (4,523 bytes) byte-identical; 1,265 CGA ticks identical |
+| `lockstep.py boot` | 16,496 | 4,904 CGA ticks identical |
+
+The deepest nesting of recompiled functions is 17. `smoke_test.py` (the
+`--smoke` mode through gd2py) passes for `boot`, `seasoncom` and `season`.
+
 **Deterministic clock for lockstep.** The oracle's timer IRQ fires at
 arbitrary instructions, which a recompiled program cannot reproduce. Both
 sides therefore advance the BIOS tick every 64 polls (service calls through a

@@ -44,13 +44,16 @@ game data, in this project. **Bring your own copy of the game.**
 never opens it. It runs from the generated code and the baked program image,
 and reads only the game's data files.
 
-1. **Recompile your NFL.EXE** (Python 3, no other dependencies):
+1. **Recompile your programs** (Python 3, no other dependencies). Pass the
+   game folder to translate both `NFL.EXE` and `SEASON.COM`, or pass just
+   `NFL.EXE`:
 
    ```sh
-   python3 tools/recomp/recompile.py /path/to/nfl/NFL.EXE [--bundle-data]
+   python3 tools/recomp/recompile.py /path/to/nfl [--bundle-data]
    ```
 
-   This takes a couple of seconds and writes `godot/recomp/`:
+   This takes a couple of seconds and writes `godot/recomp/` (and
+   `godot/recomp/season/` for SEASON.COM):
    * about 24 scripts (about 10 MB of GDScript);
    * `program.bin` (about 300 KB): the MZ header values, the root image already
      relocated for the fixed load segment, and the file's overlay section. The
@@ -126,6 +129,8 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 | `--dos-root=<path>` | folder with the game's data files (`NFL.EXE` not needed) |
 | `--args=<tail>` | DOS command tail for the program: `/i` instant replay on, `/s` season mode (reads `season.nfl` from the team disk, computer coaches, writes `stats.log`, exits), `/r` restore a saved game, `/l` log mode |
 | `--team-dir=<sub>` | sub-folder mapped as drive `D:` (default `89`) |
+| `--program=season` | run **SEASON.COM** (the season file manager) instead of NFL.EXE. It writes `season.nfl` to the team drive (`D:`, writable), and the next start with `--args=/s` plays that schedule. Needs `res://recomp/season/` from `recompile.py <game folder>` |
+| `--smoke=boot\|seasoncom\|season` | self-test, normally run headless by `tools/godot_check.sh` (see "Check it in Godot"): runs the program on a deterministic key script, saves screenshots, prints timing, and quits with exit code 0 or 1. `--smoke-out=<dir>` (default `user://smoke`), `--smoke-timeout=<seconds>` (default 600) |
 | `--turbo` | start in turbo speed |
 | `--mute` | no PC-speaker sound |
 | `--fullscreen` | start in fullscreen |
@@ -258,17 +263,49 @@ the game is paced by the 18.2 Hz clock, and the original PC ran about 0.4
 million instructions per second. **F12** raises the speed. The HUD shows the
 service calls per second.
 
+## Check it in Godot (one command, on your machine)
+
+```sh
+tools/godot_check.sh [--game-dir /path/to/nfl]
+```
+
+The script does the following:
+* downloads the official **Godot 4.3-stable** for your platform from
+  `github.com/godotengine/godot-builds` (once, into `build/godot/`) and
+  verifies it against the release's `SHA512-SUMS.txt`;
+* recompiles if `godot/recomp/` is missing (with `--game-dir`);
+* runs `godot --headless --path godot --import`;
+* compiles every script and reports failures
+  (`--script res://host/check_scripts.gd`, which also prints the compile
+  time);
+* runs the smoke mode for `boot`, `seasoncom` and `season`, with screenshots
+  in `build/godot/smoke/`.
+
+It exits non-zero if any step fails. Data files come from `--game-dir`, or
+from the bundled `recomp/game/` (`recompile.py ... --bundle-data`).
+
+* **Linux** (x86_64, arm64): run it as shown. It needs `curl`, `unzip` and
+  `sha512sum` (coreutils).
+* **macOS**: run it as shown (it uses `shasum -a 512` and the universal
+  `Godot.app`). If Gatekeeper blocks the downloaded binary, run
+  `xattr -dr com.apple.quarantine build/godot/Godot.app` once.
+* **Windows**: run it from **Git Bash** (or MSYS2), which provides bash, curl,
+  unzip and sha512sum. It uses `Godot_v4.3-stable_win64_console.exe` so the
+  output reaches the terminal. Without Git Bash, do the steps by hand:
+  download and verify the zip, then run
+  `Godot_v4.3-stable_win64_console.exe --headless --path godot --import`,
+  then `... --script res://host/check_scripts.gd`, then
+  `... -- --smoke=boot` (and `seasoncom`, `season`).
+* Already have Godot 4.3? Pass `--godot /path/to/godot`.
+
 ## Known gaps
 
 * Not run in Godot (see the status box above); `main.gd` is untested.
 * `recomp/` must be regenerated (one command, above) for every fresh checkout:
   it is not committed. The translator targets this exact `NFL.EXE` (v2.01,
   8/8/89).
-* Only `NFL.EXE` is recompiled, so `SEASON.COM` (which builds `season.nfl` for
-  `/s`) cannot run here. Build `season.nfl` under DOS or with `tools/refemu/`
-  (`scenarios.py season`), or write it by hand: the number of games, then one
-  `Home Visitor` line per game, for example `1`, then `Bills Dolphins`. The
-  `--program=` option is gone.
+* SEASON.COM runs with `--program=season`, and other DOS programs (the
+  roster editor `RE.COM`, `XORLIST.EXE`) are not translated.
 * A code path that the profiling runs never reached and that uses a new
   indirect jump target stops with `dispatch miss at SSSS:OOOO` on the HUD.
   See "Limitations" in `docs/RECOMPILATION.md`.

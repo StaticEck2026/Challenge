@@ -51,6 +51,15 @@ var dos: DOS = null
 var host: RecompHost = null
 var thread: Thread = null
 var load_error: String = ""
+## Scripts being loaded (main thread, one per frame) before the program starts.
+var loader: RecompLoader = null
+## "" = NFL.EXE, "season" = SEASON.COM (--program=season): res://recomp/<name>.
+var program_name: String = ""
+## --smoke=<scenario>: headless self-test (see host/smoke.gd).
+var smoke: Smoke = null
+var smoke_name: String = ""
+var smoke_out: String = "user://smoke"
+var smoke_timeout: float = 600.0
 var video: Video = null
 var image: Image = null
 var texture: ImageTexture = null
@@ -94,7 +103,10 @@ func _ready() -> void:
 	_build_keymap()
 	_build_ui()
 	_parse_args()
-	_start()
+	if smoke_name != "":
+		_start_smoke()
+	else:
+		_start()
 	_apply_speed()
 	_apply_view_buttons()
 	if start_fullscreen:
@@ -111,6 +123,15 @@ func _parse_args() -> void:
 			program_args = a.substr(7)
 		elif a.begins_with("--team-dir="):
 			team_dir = a.substr(11)
+		elif a.begins_with("--program="):
+			var pn := a.substr(10).to_lower()
+			program_name = "season" if pn.begins_with("season") else ""
+		elif a.begins_with("--smoke="):
+			smoke_name = a.substr(8)
+		elif a.begins_with("--smoke-out="):
+			smoke_out = a.substr(12)
+		elif a.begins_with("--smoke-timeout="):
+			smoke_timeout = a.substr(16).to_float()
 		elif a == "--turbo":
 			speed_index = SPEEDS.size() - 1
 		elif a == "--mute":
@@ -160,10 +181,16 @@ func _pick_root() -> bool:
 	return false
 
 
+## res://recomp (NFL.EXE) or res://recomp/season (SEASON.COM).
+func _program_dir() -> String:
+	return RECOMP_DIR if program_name == "" else RECOMP_DIR + "/" + program_name
+
+
 func _start() -> void:
 	_stop()
-	if not ResourceLoader.exists(RECOMP_DIR + "/recomp_index.gd") \
-			or not FileAccess.file_exists(RECOMP_DIR + "/program.bin"):
+	var pdir := _program_dir()
+	if not ResourceLoader.exists(pdir + "/recomp_index.gd") \
+			or not FileAccess.file_exists(pdir + "/program.bin"):
 		_show_message(
 			"The recompiled program is missing.\n\n"
 			+ "Run the static recompiler once on your own NFL.EXE:\n\n"
@@ -182,9 +209,9 @@ func _start() -> void:
 			+ "or press the \"Game folder...\" button above.\n\n"
 			+ "The files are not included: bring your own copy.")
 		return
-	var blob := ProgramBlob.from_file(RECOMP_DIR + "/program.bin")
+	var blob := ProgramBlob.from_file(pdir + "/program.bin")
 	if blob.error != "":
-		_show_message("Cannot use %s/program.bin: %s" % [RECOMP_DIR, blob.error])
+		_show_message("Cannot use %s/program.bin: %s" % [pdir, blob.error])
 		return
 	message.visible = false
 	machine = Machine.new()
@@ -213,29 +240,69 @@ func _start() -> void:
 	machine.log_msg("[load] %s (recompiled), data from %s %s" % [blob.file_name, dos_root, str(info)])
 	video = Video.new()
 	host = RecompHost.new()
-	load_error = ""
+	# the generated scripts are loaded on the main thread, one per frame
+	# (_load_step); the program thread starts when all are loaded
+	loader = RecompLoader.new()
+	load_error = loader.begin(pdir)
+	if load_error != "":
+		loader = null
+
+
+## One unit script per frame; then link and start the program thread.
+## Returns true while still loading.
+func _load_step() -> bool:
+	if not loader.step():
+		hud.text = loader.progress()
+		return true
+	if loader.error != "":
+		load_error = loader.error
+		loader = null
+		return false
+	host.setup(machine, bios, dos, loader.index, Callable(loader, "instance"))
+	loader = null
 	thread = Thread.new()
 	thread.start(_program_thread)
+	return false
 
 
-## Program thread: load and link the generated scripts (compiling them takes a
-## moment, so not on the main thread), then run the program until it exits.
+## Program thread: run the program until it exits or is stopped.
 func _program_thread() -> void:
-	var index_script: GDScript = load(RECOMP_DIR + "/recomp_index.gd")
-	if index_script == null:
-		load_error = "cannot load " + RECOMP_DIR + "/recomp_index.gd"
-		return
-	host.setup(machine, bios, dos, index_script.new(), _load_unit)
 	host.run()
 
 
-func _load_unit(unit_name: String) -> RecompUnit:
-	var scr: GDScript = load("%s/%s.gd" % [RECOMP_DIR, unit_name])
-	return scr.new()
+## --smoke=<scenario>: load synchronously, run on the program thread with the
+## deterministic clock, quit with the smoke test's exit code (see host/smoke.gd).
+func _start_smoke() -> void:
+	if not Smoke.SCENARIOS.has(smoke_name) or not _pick_root():
+		printerr("[smoke] unknown scenario %s or no game data folder (--dos-root=...)" % smoke_name)
+		get_tree().quit(2)
+		return
+	var pdir := Smoke.program_dir(RECOMP_DIR, smoke_name)
+	var t0 := Time.get_ticks_usec()
+	var ld := RecompLoader.new()
+	var err := ld.begin(pdir)
+	while err == "" and not ld.step():
+		pass
+	if err == "":
+		err = ld.error
+	print("[smoke] loaded %d scripts from %s in %.1f s" % [ld.names.size(), pdir,
+		(Time.get_ticks_usec() - t0) / 1.0e6])
+	smoke = Smoke.new()
+	smoke.timeout_sec = smoke_timeout
+	if err == "":
+		DirAccess.make_dir_recursive_absolute(smoke_out)
+		err = smoke.setup(smoke_name, dos_root, pdir, smoke_out, ld.index, Callable(ld, "instance"))
+	if err != "":
+		printerr("[smoke] FAIL: " + err)
+		get_tree().quit(1)
+		smoke = null
+		return
+	smoke.start()
 
 
 ## Stops the program thread (reset, folder change, quit).
 func _stop() -> void:
+	loader = null
 	if thread != null:
 		if machine != null:
 			machine.request_abort()
@@ -454,6 +521,9 @@ func _save_settings() -> void:
 func _on_modern_key(key_name: String) -> void:
 	if machine == null:
 		return
+	if key_name.begins_with("pad:"):
+		_press_coach_key(key_name)
+		return
 	var named := {"Enter": 0x1C, "Esc": 0x01, "Up": 0x48, "Down": 0x50, "Left": 0x4B,
 		"Right": 0x4D, "PgUp": 0x49, "PgDn": 0x51, "Home": 0x47, "End": 0x4F, "Space": 0x39}
 	var sc := -1
@@ -466,6 +536,36 @@ func _on_modern_key(key_name: String) -> void:
 	if sc < 0:
 		return
 	machine.key_scancodes(PackedInt32Array([sc, sc | 0x80]))
+
+
+## A coach's menu key, "pad:<L|R>:<digit>": the left-keypad coach answers
+## with the function keys (1 = F1 ... 0 = F10), the right-keypad coach with
+## the numeric keypad producing digits (scancode 47h-52h with the ASCII digit,
+## as with NumLock on; Shift gives the same when the program's NumLock is off).
+func _press_coach_key(spec: String) -> void:
+	var parts := spec.split(":")
+	if parts.size() != 3 or parts[2].length() != 1:
+		return
+	var d := parts[2].to_int()
+	if parts[1] == "L":
+		var fk := 0x44 if d == 0 else 0x3A + d
+		machine.key_scancodes(PackedInt32Array([fk, fk | 0x80]))
+		return
+	var pad := [0x52, 0x4F, 0x50, 0x51, 0x4B, 0x4C, 0x4D, 0x47, 0x48, 0x49]
+	var sc: int = pad[d]
+	if (machine.rb(BIOS.BDA_KBFLAGS) & 0x20) != 0:
+		machine.key_scancodes(PackedInt32Array([sc, sc | 0x80]))
+	else:
+		machine.key_scancodes(PackedInt32Array([0x2A, sc, sc | 0x80, 0xAA]))
+
+
+## The right-keypad coach needs keypad digits: keep the program's NumLock in
+## step with the host's when a keypad key is pressed.
+func _sync_numlock(k: InputEventKey) -> void:
+	var host_digits := (k.unicode >= 48 and k.unicode <= 57) or k.unicode == 46
+	var prog_on := (machine.rb(BIOS.BDA_KBFLAGS) & 0x20) != 0
+	if host_digits != prog_on:
+		machine.key_scancodes(PackedInt32Array([0x45, 0xC5]))
 
 
 func _on_modern_ui(action: String) -> void:
@@ -503,8 +603,15 @@ func _on_screenshot_pressed() -> void:
 
 # ------------------------------------------------------------- main loop
 func _process(delta: float) -> void:
+	if smoke != null:
+		if smoke.step():
+			get_tree().quit(smoke.exit_code)
+			smoke = null
+		return
 	_update_toolbar(delta)
 	if machine == null:
+		return
+	if loader != null and _load_step():
 		return
 	machine.wake()
 	_update_video(delta)
@@ -604,6 +711,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not scancodes.has(code):
 		return
 	var sc: int = scancodes[code]
+	if k.pressed and code in [KEY_KP_0, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5,
+			KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9, KEY_KP_PERIOD]:
+		_sync_numlock(k)
 	var seq := PackedInt32Array()
 	if k.pressed:
 		seq.append(sc)

@@ -5,10 +5,23 @@
 ##
 ## Time.  Two clocks are supported:
 ## * realtime (the game in Godot): BIOS ticks follow the wall clock (x speed),
-##   checked whenever the program calls a service or reads a port;
-## * deterministic (tests): one tick every `polls_per_tick` service calls and
-##   port reads, so a test run and the Python oracle see the same time at the
-##   same logical points.
+##   checked whenever the program calls a service, reads a port, or has taken
+##   EDGE_BUDGET loop back-edges;
+## * deterministic (tests): one tick every `polls_per_tick` *polls*: service
+##   calls, port reads and loop back-edges (backward conditional/direct jumps),
+##   so a test run and the Python oracle see the same time at the same logical
+##   points.
+##
+## Back-edges are counted by the generated code itself: the host hands out a
+## budget (cpu.eb) of back-edges it may take before it must call
+## RecompHost.edge_poll(); account_edges() books what was used whenever the
+## host gets control.  In deterministic mode the budget ends exactly at the
+## next tick.
+##
+## Timer interrupt.  If the program hooks INT 08h (Turbo Pascal does, to
+## calibrate Delay), a tick does not update the BIOS clock directly: it makes
+## IRQ 0 pending, and the next back-edge (with IF=1) delivers it to the
+## program's handler, which chains to the ROM timer stub.
 ##
 ## Threads.  In Godot the program runs on its own Thread (see main.gd).  The
 ## main thread only calls key_scancodes(), request_abort(), set_paused(),
@@ -26,6 +39,8 @@ const FONT_HI_OFF := 0xF600
 const BLOCK := 1
 const DONE := 0
 const TICK_HZ := 18.2065
+## Back-edges between edge polls in realtime mode.
+const EDGE_BUDGET := 4096
 
 var cpu: CpuState
 var handlers: Dictionary = {}
@@ -63,6 +78,8 @@ var tick_hooks: Array = []
 var service_hook: Callable = Callable()
 var port_hook: Callable = Callable()
 var max_idle_ticks: int = 200000
+var eb_set: int = 1
+var irq0_pending: bool = false
 
 # ---- shared with the main thread
 var mutex: Mutex = null
@@ -184,6 +201,13 @@ func is_hw_vector(n: int) -> bool:
 ## service has to.  Returns DONE, or BLOCK if the program must stop (exit or
 ## abort requested).
 func service(n: int) -> int:
+	account_edges()
+	var r := _service(n)
+	new_budget()
+	return r
+
+
+func _service(n: int) -> int:
 	cpu.icount += 1
 	if trace_ints:
 		var key := "%02Xh/%02Xh" % [n, cpu.r[0] >> 8]
@@ -238,6 +262,13 @@ func count_port(kind: String, port: int) -> void:
 
 
 func port_in(port: int, w: int) -> int:
+	account_edges()
+	var v := _port_in(port, w)
+	new_budget()
+	return v
+
+
+func _port_in(port: int, w: int) -> int:
 	if w:
 		return port_in(port, 0) | (port_in(port + 1, 0) << 8)
 	port &= 0xFFFF
@@ -358,8 +389,39 @@ func pump_keyboard() -> void:
 
 
 # ------------------------------------------------------------------ clock
+## True if the program replaced the INT 08h (timer) vector.
+func timer_hooked() -> bool:
+	return rw(0x20) != INT08_OFF or rw(0x22) != ROM_SEG
+
+
+## Book the back-edges the generated code took since the last budget.
+func account_edges() -> void:
+	var used := eb_set - cpu.eb
+	eb_set = cpu.eb
+	if used <= 0 or not deterministic:
+		return
+	poll_count += used
+	if poll_count >= polls_per_tick:
+		poll_count = 0
+		do_tick()
+
+
+## Hand out the next back-edge budget (1 while a timer interrupt is pending).
+func new_budget() -> void:
+	var b := EDGE_BUDGET
+	if deterministic:
+		b = maxi(1, polls_per_tick - poll_count)
+	if irq0_pending:
+		b = 1
+	eb_set = b
+	cpu.eb = b
+
+
 func do_tick() -> void:
-	bios.int08()
+	if timer_hooked():
+		irq0_pending = true
+	else:
+		bios.int08()
 	ticks += 1
 	for hk in tick_hooks:
 		var c: Callable = hk

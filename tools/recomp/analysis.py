@@ -35,6 +35,8 @@ class Func:
         self.calls = []           # (insn, kind, callee key or None)
         self.dyn = {}             # ip of dynamic transfer insn -> list of targets
         self.switch = {}          # ip of switch call -> dict(kind, targets, default, table)
+        self.cont = {}            # ip of a call whose callee returns past inline data -> continuation
+        self.bad = {}             # ip -> why it could not be decoded (reaching it is fatal)
         self.mentioned = set()
         self.written = set()
         self.name = "f_%s_%04X_%04X" % (unit_tag(self.unit), self.cs, self.ip)
@@ -64,22 +66,30 @@ def key_str(key):
 
 
 class Analysis:
-    def __init__(self, prog, profile=None, hints=None, log=print):
+    def __init__(self, prog, profile=None, hints=None, log=print, returns=None):
         self.p = prog
         self.log = log
         self.funcs = {}
         self.readers = {}
         self.base = prog.base
-        rt = 0x13F3 + prog.base
-        self.rt_seg = rt
-        self.SW_DENSE = (rt, 0x00E7)
-        self.SW_SPARSE = (rt, 0x07DC)
+        self.SW_DENSE = prog.switch_helpers.get("dense", (-1, -1))
+        self.SW_SPARSE = prog.switch_helpers.get("sparse", (-1, -1))
+        # indirect JMPs that are returns: the helper popped its return address
+        # and jumps to it (Turbo Pascal runtime); translated as RET
+        self.jmpret_sites = set()           # (unit, cs, ip)
+        # callees that return past an inline Pascal string after the CALL
+        self.pstr_callees = set()           # (cs, ip)
+        # (cs, ip after a CALL) -> where that call returns (inline data after it)
+        self.skip_sites = {}
+        # callee offsets (hints) that return past an inline NUL-terminated string
+        self.cstr_callees = {int(h["callee"], 16) for h in (hints or {}).get("inline_cstr", [])}
         self.dyn_targets = defaultdict(set)     # (unit, cs, ip) of site -> {(cs, ip)}
         self.ret_jump_sites = set()             # (cs, ip) of RET/RETF/IRET used as a jump
         self.entries = []
         self.warnings = []
         self.hints = hints or {}
         self.profile = profile or []
+        self.returns = returns or []
         self._load_profile()
 
     # ------------------------------------------------------------ profile
@@ -97,6 +107,14 @@ class Analysis:
         return best
 
     def _load_profile(self):
+        for r in self.returns:
+            if r["kind"] == "pstr":
+                c, i = (int(x, 16) for x in r["callee"].split(":"))
+                self.pstr_callees.add((c, i))
+            elif r["kind"] == "skip":
+                c, i = (int(x, 16) for x in r["site"].split(":"))
+                tc, ti = (int(x, 16) for x in r["target"].split(":"))
+                self.skip_sites[(c, i)] = ti
         for t in self.profile:
             kind = t["kind"]
             scs, sip = (int(x, 16) for x in t["site"].split(":"))
@@ -104,10 +122,21 @@ class Analysis:
             var = t["variant"]
             if scs == self.p.mgr_seg or scs == 0xF000 and kind.startswith("ret"):
                 pass
+            if kind in ("jmpret", "jmp-pstr", "jmp-skip"):
+                su = self.site_unit(scs, sip, var)
+                if su is not None:
+                    self.jmpret_sites.add((su, scs, sip))
+                continue
+            if kind.startswith("irq"):
+                # a hardware interrupt delivered to a handler the program installed
+                tu = self.site_unit(tcs, tip, var)
+                if tu is not None:
+                    self.entries.append(((tu, tcs, tip), "profile " + kind))
+                continue
             if kind in ("jmpind", "callind", "callfarind", "jmpfarind"):
                 su = self.site_unit(scs, sip, var)
-                if su is None:
-                    continue
+                if su is None or tcs == 0xF000:
+                    continue          # (jumps into the ROM go through host.dispatch)
                 self.dyn_targets[(su, scs, sip)].add((tcs, tip))
                 if kind in ("callind", "callfarind", "jmpfarind") or tcs != scs:
                     tu = self.site_unit(tcs, tip, var)
@@ -116,7 +145,7 @@ class Analysis:
             elif kind == "iret" or kind == "retf" or kind == "ret":
                 # a return to an address that no call on the stack expects:
                 # the target must be enterable through the dispatcher
-                if (scs, sip) in ((self.rt_seg, 0x00FD), (self.rt_seg, 0x07FA)):
+                if (scs, sip) in self.p.switch_sites:
                     continue          # switch helpers: handled at the call site
                 if scs == self.p.mgr_seg:
                     continue          # overlay manager (native)
@@ -195,8 +224,20 @@ class Analysis:
                 todo.append(ip)
         while todo:
             ip = todo.pop()
-            while ip not in insns:
-                ins = decode(read, cs, ip)
+            while ip not in insns and ip not in f.bad:
+                try:
+                    ins = decode(read, cs, ip)
+                except (DecodeError, IndexError) as e:
+                    # a path into bytes that are not code (e.g. data after a
+                    # CALL that never returns, or an inline-argument helper the
+                    # profile never ran): reaching it at run time is a fatal error
+                    if ip == ip0:
+                        raise
+                    f.bad[ip] = str(e)
+                    leaders.add(ip)
+                    self.warnings.append("%s: path to %04X:%04X not translated (%s)" % (
+                        key_str(key), cs, ip, e))
+                    break
                 insns[ip] = ins
                 mn = ins.mn
                 nxt = ins.next_ip()
@@ -215,6 +256,24 @@ class Analysis:
                         ins.ext = "puship"          # call $+3: push IP, continue
                     else:
                         f.calls.append((ins, "near", self.callee_key(unit, cs, ins.target)))
+                        cont = None
+                        if (cs, nxt) in self.skip_sites:
+                            cont = self.skip_sites[(cs, nxt)]
+                        elif (cs, ins.target) in self.pstr_callees:
+                            # the callee returns past an inline Pascal string
+                            cont = (nxt + 1 + read(((cs << 4) + nxt) & 0xFFFFF)) & 0xFFFF
+                        elif ins.target in self.cstr_callees:
+                            # ... or past an inline NUL-terminated string
+                            k = nxt
+                            while read(((cs << 4) + k) & 0xFFFFF) != 0:
+                                k = (k + 1) & 0xFFFF
+                            cont = (k + 1) & 0xFFFF
+                        if cont is not None:
+                            ins.ext = "pstr"
+                            f.cont[ip] = cont
+                            outs = [cont]
+                            add(cont)
+                            fall = False
                 elif mn == "callf":
                     tseg, toff = ins.target
                     if (tseg, toff) in (self.SW_DENSE, self.SW_SPARSE):
@@ -240,6 +299,9 @@ class Analysis:
                         f.calls.append((ins, "tailthunk", (th["ovl"], th["tseg"], th["toff"])))
                     else:
                         f.calls.append((ins, "tail", ck))
+                    fall = False
+                elif mn == "jmpind" and (unit, cs, ip) in self.jmpret_sites:
+                    ins.ext = "jmpret"
                     fall = False
                 elif mn in ("callind", "callfind", "jmpind", "jmpfind"):
                     tg = sorted(self.dyn_targets.get((unit, cs, ip), ()))
@@ -285,7 +347,7 @@ class Analysis:
                 ins = insns[ip]
                 b.insns.append(ins)
                 outs = succ[ip]
-                if ins.mn in x86.STOPS or ins.ext == "switch" or ins.mn in (
+                if ins.mn in x86.STOPS or ins.ext in ("switch", "pstr") or ins.mn in (
                         "jcc", "loop", "loopz", "loopnz", "jcxz") or ins.mn == "jmpf":
                     b.succs = outs
                     break
@@ -442,7 +504,7 @@ class Analysis:
             return fin
         if ins.ext == "switch":
             return 0          # the helper ends with flag-setting instructions
-        if mn in ("ret", "retf"):
+        if mn in ("ret", "retf") or ins.ext == "jmpret":
             return f.fout
         if mn == "iret":
             return 0

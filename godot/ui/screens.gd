@@ -482,26 +482,41 @@ func _field_windows(dl: DrawList, gs: GameState) -> void:
 				other.append(s)
 		var w := 380.0
 		var x := _win_x(side, w)
-		var head := 44.0 if str(b2["title"]) != "" else 14.0
+		var pad := gs.coach_side(str(b2["title"]), side)
+		var who := gs.coach_label(pad)
+		var head := 44.0 if str(b2["title"]) != "" or who == "Human" else 14.0
 		var h := head + opts.size() * 38.0 + other.size() * 30.0 + 14.0
 		var y: float = ys[side]
 		dl.art("panel", x, y, w, h, {"W": w, "H": h, "R": 14.0, "W1": w - 1.5, "H1": h - 1.5})
 		if str(b2["title"]) != "":
 			var tc := UiTheme.TEXT
-			dl.text(x + 20.0, y + 30.0, str(b2["title"]), 18.0, tc, "l", true)
+			dl.text(x + 20.0, y + 30.0, dl.fit(str(b2["title"]), 18.0, w - 150.0, true), 18.0, tc,
+				"l", true)
+		if who == "Human":
+			# whose keys: F1-F10 for the left coach, the numeric keypad for the right
+			var tag := "F-keys" if pad == "L" else "Keypad"
+			var tgw := dl.measure(tag, 13.0, true) + 20.0
+			dl.rrect(x + w - 16.0 - tgw, y + 14.0, tgw, 24.0, 12.0, "#1e3a8a", 1.0, UiTheme.ACCENT)
+			dl.text_mid(x + w - 16.0 - tgw * 0.5, y + 26.0, tag, 13.0, "#dbeafe", "c", true)
 		var oy := y + head
 		for s2 in other:
 			dl.text(x + 20.0, oy + 21.0, dl.fit(str(s2), 16.0, w - 40.0), 16.0, UiTheme.TEXT_2)
 			oy += 30.0
 		for o in opts:
 			var key: String = o[0]
+			# the coach's own keys: digit d is F<d> (left) or keypad <d> (right);
+			# entry 10 is F10 / keypad 0
+			var digit := key if key.length() == 1 else ("0" if key == "10" else "")
 			dl.rrect(x + 12.0, oy + 2.0, w - 24.0, 34.0, 8.0, UiTheme.CARD_HI)
-			var badge := UiTheme.ACCENT if key.length() == 1 else UiTheme.CARD_LINE
-			dl.rrect(x + 18.0, oy + 7.0, 30.0, 24.0, 6.0, badge)
-			dl.text_mid(x + 33.0, oy + 19.0, key, 14.0, "#ffffff", "c", true)
-			dl.text_mid(x + 60.0, oy + 19.0, dl.fit(str(o[1]), 17.0, w - 84.0), 17.0, UiTheme.TEXT)
-			if key.length() == 1:
-				dl.hot(x + 12.0, oy + 2.0, w - 24.0, 34.0, "key:" + key)
+			var badge := UiTheme.ACCENT if digit != "" else UiTheme.CARD_LINE
+			var label := key if pad == "R" or digit == "" else "F" + key
+			var bwid := maxf(30.0, dl.measure(label, 14.0, true) + 12.0)
+			dl.rrect(x + 18.0, oy + 7.0, bwid, 24.0, 6.0, badge)
+			dl.text_mid(x + 18.0 + bwid * 0.5, oy + 19.0, label, 14.0, "#ffffff", "c", true)
+			dl.text_mid(x + 30.0 + bwid, oy + 19.0, dl.fit(str(o[1]), 17.0, w - 54.0 - bwid), 17.0,
+				UiTheme.TEXT)
+			if digit != "":
+				dl.hot(x + 12.0, oy + 2.0, w - 24.0, 34.0, "pad:%s:%s" % [pad, digit])
 			oy += 38.0
 		ys[side] = y + h + 14.0
 	# status words the game prints under the field ("Offense selected")

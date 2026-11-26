@@ -1,0 +1,7 @@
+{
+  "_doc": "Address-keyed translation hints for SEASON.COM (Turbo Pascal 3.0 runtime, 22,181 bytes, 8/8/89). Offsets in the program segment. See docs/RECOMPILATION.md.",
+  "inline_cstr": [
+    {"callee": "0A81",
+     "evidence": "0A81: push bp / mov bp,sp / xchg bx,[bp+2] / loop: mov al,[cs:bx], inc bx, or al,al, jz done, call 0A63 (print char) / xchg bx,[bp+2] / ret: prints the NUL-terminated string after the CALL and returns past it (6 call sites, run-time error and Ctrl-Break messages, e.g. 1061: call 0A81 / db '^C',13,10,'User Break',0)"}
+  ]
+}

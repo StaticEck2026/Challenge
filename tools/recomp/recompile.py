@@ -2,6 +2,8 @@
 """Static recompiler: NFL.EXE (8086, PLINK86 overlays) -> GDScript.
 
   python3 -I tools/recomp/recompile.py /path/to/NFL.EXE [--out godot/recomp]
+  python3 -I tools/recomp/recompile.py /path/to/game-folder      # NFL.EXE and SEASON.COM
+  python3 -I tools/recomp/recompile.py NFL.EXE SEASON.COM
 
 Reads only the user's own NFL.EXE, plus two small address-only inputs that
 ship with the translator: tools/recomp/profile.json (dynamic control-flow
@@ -16,6 +18,8 @@ binary and must never be committed):
                   MZ header values, the root image relocated for load segment
                   0122h, and the overlay section of the file (read by the
                   native overlay manager through a virtual file)
+  season/         the same for SEASON.COM (a .COM program has its own units,
+                  index and program.bin in godot/recomp/<name>/)
   game/           with --bundle-data: the game's data files (everything in the
                   EXE's folder except programs), for a standalone export
 and build/recomp/manifest.json (translated instruction addresses, used by the
@@ -60,12 +64,15 @@ disable:
 
 
 def load_profile(paths):
-    out = []
+    """(transfers, returns) merged from coverage profile files."""
+    out, ret = [], []
     for p in paths:
         if os.path.exists(p):
             with open(p) as f:
-                out.extend(json.load(f)["transfers"])
-    return out
+                d = json.load(f)
+            out.extend(d["transfers"])
+            ret.extend(d.get("returns", []))
+    return out, ret
 
 
 def static_far_pointers(prog):
@@ -94,18 +101,30 @@ def unit_num(unit):
     return 0 if unit == "root" else unit
 
 
+def entry_key(prog):
+    if prog.kind == "com":
+        return ("root", prog.cs, 0x0100)
+    return ("root", 0x13F3 + prog.base, 0x0007)
+
+
 def build(exe, profile_paths, hints_path, log=print):
-    prog = image.Program(exe)
-    profile = load_profile(profile_paths)
-    hints = analysis.load_json(hints_path) if hints_path and os.path.exists(hints_path) else {}
-    an = analysis.Analysis(prog, profile, hints, log)
-    rt = 0x13F3 + prog.base
-    an.add_entry(("root", rt, 0x0007), "C start-up (entered by the native overlay-manager start-up)")
-    for t in prog.thunks:
-        an.add_entry((t["ovl"], t["tseg"], t["toff"]), "overlay thunk %04X:%04X" % (t["cs"], t["ip"]))
-    for seg, off in static_far_pointers(prog):
-        an.add_entry((prog.unit_of(((seg << 4) + off) & 0xFFFFF, "root"), seg, off),
-                     "profile-like: static far pointer in DGROUP")
+    prog = image.load_program(exe)
+    profile, returns = load_profile(profile_paths)
+    hints = {}
+    if hints_path is None:
+        hints_path = default_hints(exe)
+    if hints_path and os.path.exists(hints_path):
+        hints = analysis.load_json(hints_path)       # address-keyed for this exact program
+    an = analysis.Analysis(prog, profile, hints, log, returns)
+    if prog.kind == "com":
+        an.add_entry(entry_key(prog), "COM entry PSP:0100")
+    else:
+        an.add_entry(entry_key(prog), "C start-up (entered by the native overlay-manager start-up)")
+        for t in prog.thunks:
+            an.add_entry((t["ovl"], t["tseg"], t["toff"]), "overlay thunk %04X:%04X" % (t["cs"], t["ip"]))
+        for seg, off in static_far_pointers(prog):
+            an.add_entry((prog.unit_of(((seg << 4) + off) & 0xFFFFF, "root"), seg, off),
+                         "profile-like: static far pointer in DGROUP")
     an.run()
     if an.apply_ret_hints():
         an.funcs = {}
@@ -182,7 +201,7 @@ def generate(prog, an, out_dir, comments=False, log=print):
             head.append("var %s = null" % r)
         head.append("")
         head.append("")
-        head.append("func _link(units: Dictionary) -> void:")
+        head.append("func _link(%s: Dictionary) -> void:" % ("units" if refs else "_units"))
         if refs:
             for r in sorted(refs):
                 head.append("\t%s = units[\"%s\"]" % (r, r))
@@ -198,7 +217,8 @@ def generate(prog, an, out_dir, comments=False, log=print):
            "extends RefCounted", "",
            "const LOAD_SEG := 0x%X" % prog.base,
            "const UNITS := [%s]" % ", ".join('"%s"' % n for n, _ in files)]
-    entry = an.funcs[("root", 0x13F3 + prog.base, 7)]
+    entry = an.funcs[entry_key(prog)]
+    idx.append('const KIND := "%s"' % prog.kind)
     idx.append('const PROGRAM_SHA1 := "%s"' % write_program_blob(prog, out_dir))
     idx.append('const ENTRY_UNIT := "%s"' % entry.file)
     idx.append('const ENTRY_FUNC := "%s"' % entry.name)
@@ -227,6 +247,16 @@ BLOB_MAGIC = b"NFLRCMP1"
 
 def write_program_blob(prog, out_dir):
     """program.bin (layout documented in godot/host/program_blob.gd)."""
+    if prog.kind == "com":
+        data = prog.data
+        sha = hashlib.sha1(data).digest()
+        name = os.path.basename(prog.exe_path).upper().encode("ascii", "replace")[:15]
+        head = b"NFLRCOM1" + sha + struct.pack("<8H4I", prog.base, 0, 0x100, 0, 0xFFFE, 0, 0, 0,
+                                               len(data), len(data), len(data), 0)
+        head += name.ljust(16, b"\0")
+        with open(os.path.join(out_dir, "program.bin"), "wb") as fp:
+            fp.write(head + data)
+        return sha.hex()
     e = prog.exe
     h = e.hdr
     data = e.data
@@ -280,27 +310,80 @@ def write_manifest(prog, an, path):
         json.dump(data, fp)
 
 
+def find_programs(paths):
+    """Inputs -> [program file]: a folder means its NFL.EXE and SEASON.COM."""
+    out = []
+    for p in paths:
+        if os.path.isdir(p):
+            names = {n.upper(): n for n in os.listdir(p)}
+            for want in ("NFL.EXE", "SEASON.COM"):
+                if want in names:
+                    out.append(os.path.join(p, names[want]))
+        else:
+            out.append(p)
+    return out
+
+
+def out_dir_for(prog_path, base_out):
+    """NFL.EXE (or any MZ program) -> base_out; a .COM program -> base_out/<name>."""
+    with open(prog_path, "rb") as f:
+        mz = f.read(2) in (b"MZ", b"ZM")
+    if mz:
+        return base_out
+    return os.path.join(base_out, os.path.splitext(os.path.basename(prog_path))[0].lower())
+
+
+def default_hints(prog_path):
+    with open(prog_path, "rb") as f:
+        mz = f.read(2) in (b"MZ", b"ZM")
+    if mz:
+        return os.path.join(HERE, "hints.json")
+    return os.path.join(HERE, "hints_%s_com.json" % os.path.splitext(os.path.basename(prog_path))[0].lower())
+
+
+def default_profile(prog_path):
+    with open(prog_path, "rb") as f:
+        mz = f.read(2) in (b"MZ", b"ZM")
+    if mz:
+        return os.path.join(HERE, "profile.json")
+    return os.path.join(HERE, "profile_%s_com.json" % os.path.splitext(os.path.basename(prog_path))[0].lower())
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("exe", help="path to your NFL.EXE")
+    ap.add_argument("inputs", nargs="+",
+                    help="NFL.EXE and/or SEASON.COM, or the game folder (both programs)")
     ap.add_argument("--out", default=os.path.join(ROOT, "godot", "recomp"))
     ap.add_argument("--profile", action="append", default=None,
-                    help="coverage profile(s) (default: tools/recomp/profile.json)")
-    ap.add_argument("--hints", default=os.path.join(HERE, "hints.json"))
+                    help="coverage profile(s) (default: tools/recomp/profile.json for NFL.EXE, "
+                         "profile_season_com.json for SEASON.COM)")
+    ap.add_argument("--hints", default=None,
+                    help="hints file (default: tools/recomp/hints.json for NFL.EXE, "
+                         "hints_season_com.json for SEASON.COM)")
     ap.add_argument("--manifest", default=os.path.join(ROOT, "build", "recomp", "manifest.json"))
     ap.add_argument("--comments", action="store_true", help="annotate every instruction in the output")
     ap.add_argument("--bundle-data", action="store_true",
                     help="also copy the game's data files to <out>/game (standalone export)")
     a = ap.parse_args(argv)
     t0 = time.time()
-    profiles = a.profile or [os.path.join(HERE, "profile.json")]
-    prog, an = build(a.exe, profiles, a.hints)
-    for w in an.warnings:
-        print("[warn] " + w, file=sys.stderr)
-    generate(prog, an, a.out, a.comments)
+    progs = find_programs(a.inputs)
+    if not progs:
+        ap.error("no NFL.EXE / SEASON.COM found in %s" % a.inputs)
+    for path in progs:
+        out = out_dir_for(path, a.out)
+        os.makedirs(out, exist_ok=True)
+        profiles = a.profile or [default_profile(path)]
+        prog, an = build(path, profiles, a.hints)
+        for w in an.warnings:
+            print("[warn] " + w, file=sys.stderr)
+        print("[recomp] %s -> %s" % (os.path.basename(path), out))
+        generate(prog, an, out, a.comments)
+        man = a.manifest
+        if prog.kind == "com":
+            man = os.path.join(os.path.dirname(a.manifest), "manifest_%s.json" % os.path.basename(out))
+        write_manifest(prog, an, man)
     if a.bundle_data:
-        bundle_data(a.exe, a.out)
-    write_manifest(prog, an, a.manifest)
+        bundle_data(progs[0], a.out)
     print("[recomp] done in %.1fs" % (time.time() - t0))
     return 0
 

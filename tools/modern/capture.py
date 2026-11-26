@@ -86,7 +86,7 @@ def field_with(text):
 
 
 class Plan:
-    """Ordered capture points: (name, predicate, delay_ticks)."""
+    """Ordered capture points: (name, predicate, delay_ticks[, keys pressed after])."""
 
     def __init__(self, points, log):
         self.points = points
@@ -96,13 +96,20 @@ class Plan:
 
     def on_tick(self, r):
         # graphics counters must see every tick
-        for name, pred, delay in self.points[self.i:self.i + 1]:
+        for point in self.points[self.i:self.i + 1]:
+            name, pred, delay = point[:3]
             if self.wait is None and pred(r):
                 self.wait = delay
             if self.wait is not None:
                 if self.wait <= 0:
                     save(r, name, self.log)
                     r._last_cap = r.gm.ticks
+                    if len(point) > 3:
+                        # keys to press after the capture (run.py key-script syntax)
+                        from run import parse_keys
+                        for kind, v in parse_keys(point[3]):
+                            if kind == "key":
+                                r.gm.kbd_queue.extend(v)
                     self.i += 1
                     self.wait = None
                 else:
@@ -161,12 +168,18 @@ def scenario_human(game_dir, log):
 def scenario_full(game_dir, log):
     keys = scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Timeouts}{wait:20}{Alt-E}"
     pts = [
-        ("40_halftime_stats", has("TEAM STATISTICS"), 4),
+        ("40_halftime_stats", has("TEAM STATISTICS"), 4, "{PgDn}"),
+        ("40b_stats_rushing", has("- Rushing"), 4, "{PgDn}"),
+        ("40c_stats_passing", has("- Passing"), 4, "{PgDn}{PgDn}{PgDn}"),
+        ("40d_stats_sacks", has("- Sacks"), 4, "{Alt-S}"),
+        ("40e_save_game", has("aved game"), 4),
         ("41_injury", has("SHAKEN"), 2),
         ("42_final_stats", later(has("TEAM STATISTICS"), 40), 4),
-        ("43_another_game", has("Another Game"), 2),
+        ("43_another_game", has("Another Game"), 2, "n"),
+        ("44_new_teams", has("pick new teams"), 2, "n"),
+        ("45_exit_menu", has("to exit NFL Challenge"), 2),
     ]
-    r = harness.Run(game_dir, "cap-full", "", keys, max_ticks=12500, log=log)
+    r = harness.Run(game_dir, "cap-full", "", keys, max_ticks=13500, log=log)
     plan = Plan(pts, log)
     r.on_tick = plan.on_tick
     r.run()

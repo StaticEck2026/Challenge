@@ -15,17 +15,23 @@ CONFIG_KEYS = "{when:CONFIGURATION}4{when:Color graphics}4{when:PC/XT}1"
 TEAM_KEYS = ("{when:home team}{Enter}{when:visiting team}{Down}{Enter}"
              "{when:Choose the coach}c{when:Right keypad}r{when:coach for the Colts}c")
 
+SEASONCOM_KEYS = ("{when:Drive Letter}D{when:Team Disk is ready}{Space}{when:Help Screen}{Space}"
+                  "{when:HOME team}{Enter}{when:VISITING team}{Down}{Enter}{wait:20}{Esc}")
+
 SCENARIOS = {
     # fresh start: CONFIGURATION dialog, team selection, roster load, a game
     # (computer coaches) with instant replay on, played for a long while
     "boot": {"args": "/i", "keys": CONFIG_KEYS + TEAM_KEYS
              + "{when:Loading the team roster}{when:Timeouts}" + "{wait:2000}" * 8,
              "lockstep_keys": CONFIG_KEYS + TEAM_KEYS + "{when:Timeouts}" + "{wait:2000}" * 4,
-             "max_ticks": 14000},
+             "max_ticks": 20000},
     # NFL /s: season mode, extra-extra-fast, plays the game, writes STATS.LOG, exits
     "season": {"args": "/s", "keys": CONFIG_KEYS + "{when:Timeouts}{wait:20}{Alt-E}"},
     # instant replay: same as boot, shorter, until graphics mode is seen
     "replay": {"args": "/i", "keys": CONFIG_KEYS + TEAM_KEYS + "{when:Timeouts}" + "{wait:2000}" * 3},
+    # SEASON.COM (Turbo Pascal 3): team disk on D:, schedule Dolphins at Bills,
+    # Esc writes season.nfl (the schedule scenarios.py season uses) and exits
+    "seasoncom": {"program": "SEASON.COM", "args": "", "keys": SEASONCOM_KEYS},
 }
 
 # Scenarios that do not end by themselves stop when their key script is done.
@@ -36,7 +42,7 @@ def drives(work):
     return {"A": work, "B": work, "C": work, "D": os.path.join(work, "89")}
 
 
-def prepare_dir(game_dir, work, scenario):
+def prepare_dir(game_dir, work, scenario, season_file=None):
     """Fresh writable copy of the game folder for one scenario run."""
     if not game_dir or not any(n.upper() == "LEAGUE.NFL" for n in os.listdir(game_dir)):
         raise SystemExit("--game-dir must point at the game folder (with LEAGUE.NFL)")
@@ -52,5 +58,5 @@ def prepare_dir(game_dir, work, scenario):
             os.remove(os.path.join(team, n))
     if scenario == "season":
         with open(os.path.join(team, "SEASON.NFL"), "wb") as f:
-            f.write(SEASON_NFL)
+            f.write(open(season_file, "rb").read() if season_file else SEASON_NFL)
     return work

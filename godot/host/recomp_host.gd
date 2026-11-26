@@ -52,6 +52,9 @@ var unwinds: int = 0
 ## How many unwinds to log (diagnostics).
 var log_unwinds: int = 0
 var last_reloc_off: int = 0
+## "exe" (NFL.EXE: PLINK86 start-up first) or "com" (SEASON.COM).
+var kind: String = "exe"
+var irqs_delivered: int = 0
 
 
 func setup(p_machine: Machine, p_bios: BIOS, p_dos: DOS, index, loader: Callable) -> void:
@@ -66,6 +69,7 @@ func setup(p_machine: Machine, p_bios: BIOS, p_dos: DOS, index, loader: Callable
 		m.abort = true
 	entry_unit = index.ENTRY_UNIT
 	entry_func = index.ENTRY_FUNC
+	kind = index.KIND
 	for name in index.UNITS:
 		var u = loader.call(name)
 		u.setup(self)
@@ -89,9 +93,10 @@ func setup(p_machine: Machine, p_bios: BIOS, p_dos: DOS, index, loader: Callable
 
 ## Program thread body: start-up, then the C start-up code.  Returns the exit code.
 func run() -> int:
-	if error_msg != "" or not startup():
+	if error_msg != "" or (kind == "exe" and not startup()):
 		finished = true
 		return -1
+	m.new_budget()
 	var u = units[entry_unit]
 	var t: int = u.call(entry_func)
 	finished = true
@@ -99,7 +104,7 @@ func run() -> int:
 		result = m.exit_code
 		return result
 	if t != ABORT:
-		fatal(t, "C start-up returned")
+		fatal(t, "the program's entry function returned")
 	return -1
 
 
@@ -128,11 +133,42 @@ func unwind(t: int, site: int) -> int:
 	return t
 
 
-## Called at loop back-edges (every few thousand): true = stop the program.
-func poll() -> bool:
+## The generated code ran out of back-edge budget (st.eb) at a backward jump
+## to `t` (packed CS:IP).  All registers and flags are in `st`.  Books the
+## back-edges (the deterministic clock may tick), keeps the realtime clock
+## going, and delivers a pending timer interrupt to the program's handler.
+## Returns ABORT (-1) if the program must stop, else 0.
+func edge_poll(t: int) -> int:
+	m.account_edges()
 	if not m.deterministic:
 		m.sync_time()
-	return m.abort or m.exited
+	if m.abort or m.exited:
+		return ABORT
+	if m.irq0_pending and st.iflag != 0:
+		m.irq0_pending = false
+		var r := deliver_irq(8, t)
+		if r != t:
+			if r != ABORT:
+				fatal(r, "timer interrupt handler returned elsewhere")
+			return ABORT
+		m.account_edges()
+	m.new_budget()
+	return 0
+
+
+## Hardware interrupt n at the point `t` (packed CS:IP) of the program:
+## push FLAGS/CS/IP, clear IF/TF, run the handler the IVT names.  Returns the
+## address its IRET returned to.
+func deliver_irq(n: int, t: int) -> int:
+	irqs_delivered += 1
+	st.push(st.get_flags())
+	st.push((t >> 16) & 0xFFFF)
+	st.push(t & 0xFFFF)
+	st.iflag = 0
+	st.tf = 0
+	var off := m.rw(n * 4)
+	var seg := m.rw(n * 4 + 2)
+	return dispatch((seg << 16) | off)
 
 
 func port_in(port: int, w: int) -> int:
@@ -172,6 +208,8 @@ func dispatch(t: int) -> int:
 	var cs := (t >> 16) & 0xFFFF
 	var ip := t & 0xFFFF
 	if cs == Machine.ROM_SEG:
+		if ip == Machine.INT08_OFF:
+			return timer_stub()
 		return iret_to_rom(t)
 	var lin := ((cs << 4) + ip) & 0xFFFFF
 	var u := unit_at(lin)
@@ -202,12 +240,42 @@ func do_int(n: int) -> int:
 ## continues where the stub's IRET goes.
 func iret_to_rom(t: int) -> int:
 	var off := t & 0xFFFF
+	if off == Machine.INT08_OFF:
+		return timer_stub()
 	if off < Machine.STUB_BASE or off >= Machine.STUB_BASE + 0x400 or (off & 3) != 0:
 		return fatal(t, "jump into ROM outside the service stubs")
 	var r := rom_stub((off - Machine.STUB_BASE) >> 2)
 	if r < 0:
 		return r
 	return dispatch(r)
+
+
+## The ROM timer handler F000:E400, reached when the program's INT 08h hook
+## chains to the old vector: `F1 08 / INT 1Ch / push ax / mov al,20h /
+## out 20h,al / pop ax / IRET`.  Returns where the IRET goes (the interrupted
+## program), without dispatching it: that is the hook's caller's business.
+func timer_stub() -> int:
+	st.op_cs = Machine.ROM_SEG
+	st.op_ip = Machine.INT08_OFF
+	if m.service(8) != Machine.DONE:
+		return ABORT
+	st.push(st.get_flags())
+	st.push(Machine.ROM_SEG)
+	st.push(Machine.INT08_OFF + 4)
+	st.iflag = 0
+	st.tf = 0
+	var r := do_int(0x1C)
+	if r < 0:
+		return r
+	if r != ((Machine.ROM_SEG << 16) | (Machine.INT08_OFF + 4)):
+		return fatal(r, "INT 1Ch handler returned elsewhere")
+	st.push(st.r[0])
+	m.port_out(0x20, 0x20, 0)
+	st.pop()
+	var ip := st.pop()
+	var cs := st.pop()
+	st.set_flags(st.pop())
+	return (cs << 16) | ip
 
 
 ## F000:E000+4n = `F1 nn CF`: service n, then IRET.

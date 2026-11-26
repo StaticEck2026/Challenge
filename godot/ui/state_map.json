@@ -2,38 +2,258 @@
   "about": "Read-only addresses of NFL Challenge v2.01 game variables used by the Modern view (godot/ui/game_state.gd). Facts about the binary, no game data. Offsets are in DGROUP (link segment 23D6, run-time segment 24F8 at the fixed load segment 0122, linear base 0x24F80). Types: u8, s16 (little endian; several words are at odd offsets). Evidence: 'code' = read from the disassembly (tools/disasm), 'diff' = found by memory diffing in the oracle/recompiled runs (tools/modern/research.py), 'check' = verified by tools/modern/check_positions.py. See docs/MODERN_UI.md.",
   "dgroup_linear": "0x24F80",
   "vars": {
-    "quarter":        {"off": "0x57EA", "type": "s16", "meaning": "quarter 1..4 (5 = overtime)", "evidence": "code: save game writes [57EA] under 'Quarter and time' (ovl 3 203D:0413)", "confidence": "high"},
-    "poss":           {"off": "0x57EC", "type": "s16", "meaning": "team with the ball: 1 home, 2 visitor", "evidence": "code: 0031:0D34 sets [57EC] and the defence [57EE]; save game 'tm w/ball' (203D:052B)", "confidence": "high"},
-    "clock_min":      {"off": "0x6719", "type": "s16", "meaning": "game clock minutes", "evidence": "code: 0AAB:0596 returns [6719],[6717] as min, sec; diff: equals the scoreboard clock in 11,054 text frames", "confidence": "high"},
-    "clock_sec":      {"off": "0x6717", "type": "s16", "meaning": "game clock seconds", "evidence": "as clock_min", "confidence": "high"},
-    "play_clock":     {"off": "0x6715", "type": "s16", "meaning": "play clock shown right of 'Down:' (30..25)", "evidence": "diff: equals the scoreboard value in every text frame of the boot run", "confidence": "high"},
-    "down":           {"off": "0x672F", "type": "s16", "meaning": "down 1..4", "evidence": "code: save game 'down' (203D:051E); diff", "confidence": "high"},
-    "spot":           {"off": "0x6733", "type": "s16", "meaning": "ball spot in yards from the left goal line of the text field (0..100). Updated to the play's result before the play is shown", "evidence": "code: 0BFF:0134 getter, 0BFF:0166 flips 100-x; diff against the field marker", "confidence": "high"},
-    "series_start":   {"off": "0x6731", "type": "s16", "meaning": "spot where the current set of downs started; first-down line = series_start + 10 * dir", "evidence": "code: 0BFF:014D 'strt yd' in the save game; diff: To Go = 10 - |spot - series_start|", "confidence": "high"},
-    "los":            {"off": "0x5BF4", "type": "s16", "meaning": "line of scrimmage of the play being run/shown (yards from the left goal)", "evidence": "diff: equals the pre-play spot at the first graphics frame of 11 plays; check", "confidence": "medium"},
-    "dir_home":       {"off": "0x5BE0", "type": "s16", "meaning": "direction the home team attacks on the text field: +1 right, -1 left", "evidence": "code: 0031:0D16 (team 1)", "confidence": "high"},
-    "dir_visitor":    {"off": "0x5BE2", "type": "s16", "meaning": "direction of the visitor", "evidence": "code: 0031:0D16 (team 2)", "confidence": "high"},
-    "timeouts_home":  {"off": "0x5BDC", "type": "s16", "meaning": "time-outs left, home", "evidence": "code: 0031:0C66 (team 1); save game", "confidence": "high"},
-    "timeouts_visitor": {"off": "0x5BDE", "type": "s16", "meaning": "time-outs left, visitor", "evidence": "code: 0031:0C66 (team 2)", "confidence": "high"},
-    "score_home":     {"off": "0x6765", "type": "s16[5]", "meaning": "home points per period (Q1..Q4, OT)", "evidence": "code: 0C5F:0058 (team 1); diff against the box score", "confidence": "high"},
-    "score_visitor":  {"off": "0x676F", "type": "s16[5]", "meaning": "visitor points per period", "evidence": "code: 0C5F:0058 (team 2)", "confidence": "high"},
-    "total_home":     {"off": "0x4122", "type": "s16", "meaning": "home total", "evidence": "code: 0C5F:0096 clears 4122/4124 then sums; diff", "confidence": "high"},
-    "total_visitor":  {"off": "0x4124", "type": "s16", "meaning": "visitor total", "evidence": "as total_home", "confidence": "high"},
-    "marker_col":     {"off": "0x672B", "type": "s16", "meaning": "column of the ball marker on the 80x25 field overview (yards = (col - 14) * 2); moves during kicks shown in text mode", "evidence": "diff: equals the column of the marker glyph", "confidence": "high"},
-    "marker_row":     {"off": "0x672D", "type": "s16", "meaning": "row of the ball marker on the field overview", "evidence": "diff", "confidence": "medium"},
-    "situation":      {"off": "0x688F", "type": "s16", "meaning": "'sit' of the save game", "evidence": "code: 203D:0533", "confidence": "high"},
-    "play_kind":      {"off": "0x3CA4", "type": "s16", "meaning": "'play' of the save game (1 run, 2 pass observed)", "evidence": "code: 203D:052F; diff", "confidence": "medium"},
-    "name_home":      {"off": "0x83CF", "type": "char[15]", "meaning": "home short name (team file name)", "evidence": "code: season.nfl sscanf target (196D:4E6F); diff", "confidence": "high"},
-    "fullname_home":  {"off": "0x83DE", "type": "char[32]", "meaning": "home display name", "evidence": "diff", "confidence": "medium"},
-    "name_visitor":   {"off": "0x8400", "type": "char[15]", "meaning": "visitor short name", "evidence": "as name_home", "confidence": "high"},
-    "fullname_visitor": {"off": "0x840F", "type": "char[32]", "meaning": "visitor display name", "evidence": "diff", "confidence": "medium"},
-    "roster_home":    {"off": "0x516C", "type": "rec15[49]", "meaning": "home roster: 15-byte records, byte 0 jersey, byte 1 position code (names at DGROUP:090C: OL C TE WR RB QB DL LB DB P K)", "evidence": "code: 0031:0C9E returns DGROUP:516A / 5478 per team (word 0 = team number); diff against the .NFL file", "confidence": "high"},
-    "roster_visitor": {"off": "0x547A", "type": "rec15[49]", "meaning": "visitor roster", "evidence": "as roster_home", "confidence": "high"},
-    "onfield_home":   {"off": "0x546D", "type": "u8[11]", "meaning": "roster indexes of the home team's 11 players on the field, in the order of the play records", "evidence": "diff: holds the starters of the formation; check: QB under centre, C on the ball", "confidence": "medium"},
-    "onfield_visitor": {"off": "0x577B", "type": "u8[11]", "meaning": "as onfield_home for the visitor", "evidence": "as onfield_home", "confidence": "medium"},
-    "play_records":   {"off": "0xA494", "type": "s16[23][3]", "meaning": "the graphics play: 23 records (x, y, k) in CGA pixels relative to the scrolled field; 0-10 offence (drawn as O), 11-21 defence (X), 22 the ball. The sprite's top-left corner", "evidence": "diff: equal to the X/O positions recognised in CGA memory at every frame; check", "confidence": "high"},
-    "cam_x":          {"off": "0x8753", "type": "s16", "meaning": "horizontal field scroll: field_x = record_x - cam_x (fraction byte at 8752)", "evidence": "diff: changes exactly when the field scrolls sideways; check", "confidence": "high"},
-    "cam_y":          {"off": "0x8755", "type": "s16", "meaning": "vertical field scroll: field_y = record_y + cam_y (fraction byte at 8754)", "evidence": "diff: changes exactly when the yard lines scroll; check", "confidence": "high"}
+    "quarter": {
+      "off": "0x57EA",
+      "type": "s16",
+      "meaning": "quarter 1..4 (5 = overtime)",
+      "evidence": "code: save game writes [57EA] under 'Quarter and time' (ovl 3 203D:0413)",
+      "confidence": "high"
+    },
+    "poss": {
+      "off": "0x57EC",
+      "type": "s16",
+      "meaning": "team with the ball: 1 home, 2 visitor",
+      "evidence": "code: 0031:0D34 sets [57EC] and the defence [57EE]; save game 'tm w/ball' (203D:052B)",
+      "confidence": "high"
+    },
+    "clock_min": {
+      "off": "0x6719",
+      "type": "s16",
+      "meaning": "game clock minutes",
+      "evidence": "code: 0AAB:0596 returns [6719],[6717] as min, sec; diff: equals the scoreboard clock in 11,054 text frames",
+      "confidence": "high"
+    },
+    "clock_sec": {
+      "off": "0x6717",
+      "type": "s16",
+      "meaning": "game clock seconds",
+      "evidence": "as clock_min",
+      "confidence": "high"
+    },
+    "play_clock": {
+      "off": "0x6715",
+      "type": "s16",
+      "meaning": "play clock shown right of 'Down:' (30..25)",
+      "evidence": "diff: equals the scoreboard value in every text frame of the boot run",
+      "confidence": "high"
+    },
+    "down": {
+      "off": "0x672F",
+      "type": "s16",
+      "meaning": "down 1..4",
+      "evidence": "code: save game 'down' (203D:051E); diff",
+      "confidence": "high"
+    },
+    "spot": {
+      "off": "0x6733",
+      "type": "s16",
+      "meaning": "ball spot in yards from the left goal line of the text field (0..100). Updated to the play's result before the play is shown",
+      "evidence": "code: 0BFF:0134 getter, 0BFF:0166 flips 100-x; diff against the field marker",
+      "confidence": "high"
+    },
+    "series_start": {
+      "off": "0x6731",
+      "type": "s16",
+      "meaning": "spot where the current set of downs started; first-down line = series_start + 10 * dir",
+      "evidence": "code: 0BFF:014D 'strt yd' in the save game; diff: To Go = 10 - |spot - series_start|",
+      "confidence": "high"
+    },
+    "los": {
+      "off": "0x5BF4",
+      "type": "s16",
+      "meaning": "line of scrimmage of the play being run/shown (yards from the left goal)",
+      "evidence": "diff: equals the pre-play spot at the first graphics frame of 11 plays; check",
+      "confidence": "medium"
+    },
+    "dir_home": {
+      "off": "0x5BE0",
+      "type": "s16",
+      "meaning": "direction the home team attacks on the text field: +1 right, -1 left",
+      "evidence": "code: 0031:0D16 (team 1)",
+      "confidence": "high"
+    },
+    "dir_visitor": {
+      "off": "0x5BE2",
+      "type": "s16",
+      "meaning": "direction of the visitor",
+      "evidence": "code: 0031:0D16 (team 2)",
+      "confidence": "high"
+    },
+    "timeouts_home": {
+      "off": "0x5BDC",
+      "type": "s16",
+      "meaning": "time-outs left, home",
+      "evidence": "code: 0031:0C66 (team 1); save game",
+      "confidence": "high"
+    },
+    "timeouts_visitor": {
+      "off": "0x5BDE",
+      "type": "s16",
+      "meaning": "time-outs left, visitor",
+      "evidence": "code: 0031:0C66 (team 2)",
+      "confidence": "high"
+    },
+    "score_home": {
+      "off": "0x6765",
+      "type": "s16[5]",
+      "meaning": "home points per period (Q1..Q4, OT)",
+      "evidence": "code: 0C5F:0058 (team 1); diff against the box score",
+      "confidence": "high"
+    },
+    "score_visitor": {
+      "off": "0x676F",
+      "type": "s16[5]",
+      "meaning": "visitor points per period",
+      "evidence": "code: 0C5F:0058 (team 2)",
+      "confidence": "high"
+    },
+    "total_home": {
+      "off": "0x4122",
+      "type": "s16",
+      "meaning": "home total",
+      "evidence": "code: 0C5F:0096 clears 4122/4124 then sums; diff",
+      "confidence": "high"
+    },
+    "total_visitor": {
+      "off": "0x4124",
+      "type": "s16",
+      "meaning": "visitor total",
+      "evidence": "as total_home",
+      "confidence": "high"
+    },
+    "marker_col": {
+      "off": "0x672B",
+      "type": "s16",
+      "meaning": "column of the ball marker on the 80x25 field overview (yards = (col - 14) * 2); moves during kicks shown in text mode",
+      "evidence": "diff: equals the column of the marker glyph",
+      "confidence": "high"
+    },
+    "marker_row": {
+      "off": "0x672D",
+      "type": "s16",
+      "meaning": "row of the ball marker on the field overview",
+      "evidence": "diff",
+      "confidence": "medium"
+    },
+    "situation": {
+      "off": "0x688F",
+      "type": "s16",
+      "meaning": "'sit' of the save game",
+      "evidence": "code: 203D:0533",
+      "confidence": "high"
+    },
+    "play_kind": {
+      "off": "0x3CA4",
+      "type": "s16",
+      "meaning": "'play' of the save game (1 run, 2 pass observed)",
+      "evidence": "code: 203D:052F; diff",
+      "confidence": "medium"
+    },
+    "name_home": {
+      "off": "0x83CF",
+      "type": "char[15]",
+      "meaning": "home short name (team file name)",
+      "evidence": "code: season.nfl sscanf target (196D:4E6F); diff",
+      "confidence": "high"
+    },
+    "fullname_home": {
+      "off": "0x83DE",
+      "type": "char[32]",
+      "meaning": "home display name",
+      "evidence": "diff",
+      "confidence": "medium"
+    },
+    "name_visitor": {
+      "off": "0x8400",
+      "type": "char[15]",
+      "meaning": "visitor short name",
+      "evidence": "as name_home",
+      "confidence": "high"
+    },
+    "fullname_visitor": {
+      "off": "0x840F",
+      "type": "char[32]",
+      "meaning": "visitor display name",
+      "evidence": "diff",
+      "confidence": "medium"
+    },
+    "roster_home": {
+      "off": "0x516C",
+      "type": "rec15[49]",
+      "meaning": "home roster: 15-byte records, byte 0 jersey, byte 1 position code (names at DGROUP:090C: OL C TE WR RB QB DL LB DB P K)",
+      "evidence": "code: 0031:0C9E returns DGROUP:516A / 5478 per team (word 0 = team number); diff against the .NFL file",
+      "confidence": "high"
+    },
+    "roster_visitor": {
+      "off": "0x547A",
+      "type": "rec15[49]",
+      "meaning": "visitor roster",
+      "evidence": "as roster_home",
+      "confidence": "high"
+    },
+    "onfield_home": {
+      "off": "0x546D",
+      "type": "u8[11]",
+      "meaning": "roster indexes of the home team's 11 players on the field, in the order of the play records",
+      "evidence": "diff: holds the starters of the formation; check: QB under centre, C on the ball",
+      "confidence": "medium"
+    },
+    "onfield_visitor": {
+      "off": "0x577B",
+      "type": "u8[11]",
+      "meaning": "as onfield_home for the visitor",
+      "evidence": "as onfield_home",
+      "confidence": "medium"
+    },
+    "play_records": {
+      "off": "0xA494",
+      "type": "s16[23][3]",
+      "meaning": "the graphics play: 23 records (x, y, k) in CGA pixels relative to the scrolled field; 0-10 offence (drawn as O), 11-21 defence (X), 22 the ball. The sprite's top-left corner",
+      "evidence": "diff: equal to the X/O positions recognised in CGA memory at every frame; check",
+      "confidence": "high"
+    },
+    "cam_x": {
+      "off": "0x8753",
+      "type": "s16",
+      "meaning": "horizontal field scroll: field_x = record_x - cam_x (fraction byte at 8752)",
+      "evidence": "diff: changes exactly when the field scrolls sideways; check",
+      "confidence": "high"
+    },
+    "cam_y": {
+      "off": "0x8755",
+      "type": "s16",
+      "meaning": "vertical field scroll: field_y = record_y + cam_y (fraction byte at 8754)",
+      "evidence": "diff: changes exactly when the yard lines scroll; check",
+      "confidence": "high"
+    },
+    "coach_home": {
+      "off": "0x83CB",
+      "type": "s16",
+      "meaning": "home coach: 1 human, 2 computer",
+      "evidence": "code: the save game writes [83CB] [83CD] with the home names under 'Coach, Keypad, Team' (12CA:0164); diff",
+      "confidence": "high"
+    },
+    "keypad_home": {
+      "off": "0x83CD",
+      "type": "s16",
+      "meaning": "home coach's keyboard side: 1 right (numeric keypad), -1 left (function keys)",
+      "evidence": "as coach_home; check: a right-keypad human answers with keypad digits, a left-keypad one with F1-F10 (tools/modern/capture.py human scenarios)",
+      "confidence": "high"
+    },
+    "coach_visitor": {
+      "off": "0x83FC",
+      "type": "s16",
+      "meaning": "visitor coach: 1 human, 2 computer",
+      "evidence": "code: save game (12CA:018C); diff",
+      "confidence": "high"
+    },
+    "keypad_visitor": {
+      "off": "0x83FE",
+      "type": "s16",
+      "meaning": "visitor coach's keyboard side (1 right, -1 left)",
+      "evidence": "as keypad_home",
+      "confidence": "high"
+    }
   },
   "field": {
     "px_per_yard": 8,
