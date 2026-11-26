@@ -104,6 +104,18 @@ def sprite_score(px, spr, x, y):
     return ok / n - (bad / bg if bg else 0.0)
 
 
+def in_scroll():
+    """True while the program is inside its scroll routine (ovl 5 196D:0DFE,
+    f_o05_1A8F_0DFE in the recompiled code): the tick hook runs on the
+    program's own call stack in this harness."""
+    f = sys._getframe(1)
+    while f is not None:
+        if f.f_code.co_name == "f_o05_1A8F_0DFE":
+            return True
+        f = f.f_back
+    return False
+
+
 def field_lines(px):
     return [y for y in range(200) if int((px[y] == 3).sum()) > 200]
 
@@ -125,7 +137,8 @@ def main():
     total = {"frames": 0, "players": 0, "matched": 0, "offscreen": 0, "max_err": 0.0,
              "decl_max": 0.0, "vis": {}, "vis_frames": 0, "iso": 0, "iso_matched": 0, "iso_exact": 0, "spots": [], "line_detail": [],
              "line_frames": 0, "line_bad": 0, "plays": 0, "spot_bad": 0, "missed": [], "unplaced": 0, "settled": 0,
-             "pinned": {}, "pin_detail": [], "iso_shifted": 0}
+             "pinned": {}, "pin_detail": [], "iso_shifted": 0,
+             "scroll_frames": 0}
     for title, args, keys in runs:
         r = harness.Run(a.game_dir, "check", args, keys, max_ticks=a.ticks, log=lambda m: None)
         gs = ui.GameState()
@@ -222,13 +235,23 @@ def main():
             sig = (tuple(gs._raw_records), zlib.crc32(bytes(mem[0xB8000:0xBC000])))
             settled = sig == st.get("sig")
             st["sig"] = sig
-            # the scroll when the game last wrote the records: during a
-            # sideways scroll it redraws the sprites shifted by the scroll
-            # step before it writes the next records
-            if sig[0] != st.get("rec"):
-                st["rec"] = sig[0]
-                st["cam_w"] = (gs.cam_x, gs.cam_y)
-            dcx = gs.cam_x - st["cam_w"][0]
+            # Scrolling (ovl 5 196D:0DFE): the game first moves every record
+            # by the scroll step (196D:0F91, 1AAD:0050), then updates 8755
+            # and copies video memory along the field, then updates 8753 and
+            # copies it sideways column by column (ovl 7 1CE3:0008, about
+            # 16,000 loop iterations: up to ~250 ticks of this test clock, a
+            # moment at real speed).  Until
+            # the copy reaches a sprite, the screen still shows it where the
+            # previous scroll put it.  So while that routine is running, a
+            # sprite may be either at its record or at the same field point
+            # under the scroll from before the routine started.
+            scrolling = in_scroll()
+            if not scrolling:
+                st["cam_idle"] = (gs.cam_x, gs.cam_y)
+            cix, ciy = st.get("cam_idle", (gs.cam_x, gs.cam_y))
+            old_dx, old_dy = -(gs.cam_x - cix), gs.cam_y - ciy
+            if scrolling:
+                total["scroll_frames"] += 1
             if settled:
                 total["settled"] += 1
             exp = []
@@ -250,9 +273,16 @@ def main():
                 spr = sprites[0] if p["off"] else sprites[1]
                 best = (sprite_score(px, spr, ex, ey), 0, 0)
                 shifted = False
-                if best[0] < 0.75 and dcx != 0 and sprite_score(px, spr, ex - dcx, ey) >= 0.75:
-                    best = (sprite_score(px, spr, ex - dcx, ey), 0, 0)
-                    shifted = True
+                if best[0] < 0.75 and scrolling and (old_dx or old_dy):
+                    # the copy goes along the field first (8755), then
+                    # sideways (8753): the picture can be before both, or
+                    # past the first and before the second
+                    for odx, ody in ((old_dx, old_dy), (old_dx, 0)):
+                        s_old = sprite_score(px, spr, ex + odx, ey + ody)
+                        if s_old >= 0.75:
+                            best = (s_old, 0, 0)
+                            shifted = True
+                            break
                 if best[0] < 0.75:          # not at the exact pixel: search the tolerance window
                     for dy in range(-a.tol, a.tol + 1):
                         for dx in range(-a.tol, a.tol + 1):
@@ -272,6 +302,7 @@ def main():
                     total["missed"].append((r.gm.ticks, i, ex, ey, round(best[0], 2)))
             # 2. yard lines: drawn rows must sit on multiples of 5 yards
             lines = field_lines(px) if settled else []
+            cam_ys = [gs.cam_y, ciy] if scrolling else [gs.cam_y]
             if lines:
                 total["line_frames"] += 1
                 # group rows into drawn lines (the end lines are several
@@ -285,7 +316,7 @@ def main():
                 for run in runs:
                     if len(run) > 3:
                         continue        # a filled area (out of bounds behind an end line), not a line
-                    fxs = [los + (los_y - (ly + gs.cam_y)) / gs.px_per_yard for ly in run]
+                    fxs = [los + (los_y - (ly + cy)) / gs.px_per_yard for ly in run for cy in cam_ys]
                     if min(abs(fx / 5.0 - round(fx / 5.0)) * 5.0 for fx in fxs) > 0.2:
                         total["line_bad"] += 1
                         if len(total["line_detail"]) < 15:
@@ -319,8 +350,9 @@ def main():
     print("[check] isolated players (no other sprite overlapping, so the XOR-drawn shape is intact): "
           "%d, matched %d (%.2f%%), %d of them at exactly the same pixel"
           % (t["iso"], t["iso_matched"], ipct, t["iso_exact"]))
-    print("[check] of them %d drawn shifted by the sideways scroll the game made after writing the records "
-          "(it redraws the sprites before the next records)" % t["iso_shifted"])
+    print("[check] %d play frames while the game was copying video memory for a scroll; of the isolated "
+          "players, %d were still on the screen where the previous scroll put them (exactly)"
+          % (t["scroll_frames"], t["iso_shifted"]))
     print("[check] (overlapping sprites destroy each other's shapes in the XOR-drawn CGA frame, "
           "so only isolated players are a fair test)")
     print("[check] display-only declutter of the Modern view (zoom disc size): largest disc offset "

@@ -451,7 +451,11 @@ func _read_play(mem: PackedByteArray) -> void:
 
 
 ## CGA sprite position (top-left, relative to the scrolled field) -> field
-## yards [fx, fy].  The inverse is field_to_screen().
+## yards [fx, fy].  The inverse is field_to_screen().  The records and the
+## scroll (8753/8755) always agree: a scroll step moves every record and the
+## scroll variable together (ovl 5 196D:0F91 and 1AAD:0050, before
+## 196D:0DFE copies video memory), so this gives the game's own positions
+## even while the screen is still being shifted.
 func screen_to_field(sx: int, sy: int, los: float, los_y: float) -> Array:
 	var wy := float(sy + cam_y) + sprite_centre
 	var wx := float(sx - cam_x) + sprite_centre

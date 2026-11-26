@@ -319,10 +319,19 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   tick can fall while the game is still writing records or redrawing its
   XOR sprites. The pixel and yard-line comparisons therefore use settled
   frames only (records and CGA memory unchanged since the previous tick).
-  During a sideways scroll the game moves the scroll variable and redraws
-  the sprites shifted by that step before it writes the next records; a
-  sprite found exactly there counts as matched and is reported separately.
-  Records the
+  Scrolling is modelled as the game does it (ovl 5 `196D:0DFE`): it first
+  moves every record by the scroll step (`196D:0F91`, `1AAD:0050`), then
+  updates `8755` and copies video memory along the field, then updates
+  `8753` and copies it sideways column by column (ovl 7 `1CE3:0008`).
+  Records and scroll variables therefore always agree, and `GameState` uses
+  them as they are; only the screen lags while the copy runs. The copy is
+  about 16,000 loop iterations, so in this test clock (a tick every 64
+  polls, loop back-edges included) it spans up to ~250 ticks, at real speed
+  a moment. While the scroll routine is on the program's call stack (the
+  harness runs the tick hook on that stack), a sprite counts as matched at
+  its record or exactly where the field point was under the scroll from
+  before the routine started (both axes, or sideways only once the copy
+  along the field is done); those are reported separately. Records the
   game has not written yet in the current graphics session are not shown by
   the view and not checked (`placed`, see "Players"); the ball spot is
   checked at the first frame with the whole line-up written.
@@ -347,15 +356,11 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   beyond the far sideline were pinned to the edge in the horizontal full
   field), 0 of 11,973 frames with a yard line off a 5-yard multiple, 3 of
   3 snaps within a yard, 3,372 stale records hidden. Of 79,194 isolated
-  positions 70,666 match (69,154 exactly, 1,512 one scroll step off), so
-  that run reports FAIL on the 99 % sprite criterion: while the field
-  scrolls sideways (`8753` non-zero, ticks 15,155-18,300) the game draws
-  most sprites one scroll step (8 px, one yard across the field) away from
-  where the records and the scroll variable put them, even in frames where
-  it has just written the records. The rule behind that offset is not
-  known yet, so during sideways scrolls a disc can be up to a yard off
-  across the field; along the field and at all other times the positions
-  are exact.
+  positions **78,869 (99.59 %) are at the exact pixel**: 69,154 at their
+  record, 9,715 during the 5,155 frames in which the game was still copying
+  video memory for a scroll, at the pre-scroll place of the same field
+  point. Of the remaining 325, the listed ones are one record at the left
+  screen edge (x = 6) with no sprite drawn there. PASS.
 * **Passivity.** `lockstep.py --with-ui` runs `GameState.update()` and
   `Screens.build()` on every BIOS tick of the recompiled side (as main.gd does
   every frame), cycling through both field orientations with and without
@@ -392,9 +397,9 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   buttons; the game ignores them there.
 * The save-game and exit screens were not reached in scripted runs and use
   the text fallback.
-* While the game scrolls the field sideways (long plays near a sideline) a
-  disc can be up to one yard off across the field (see the 36,000-tick
-  result above).
+* While the game copies video memory for a scroll (a moment at real speed)
+  its screen still shows the pre-scroll picture; the Modern view shows the
+  game's positions (records and scroll variables, which are updated first).
 
 ### Godot 4.3 API audit
 
