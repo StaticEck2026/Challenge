@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Test the GDScript port without Godot.
 
-1. Transpile godot/emu/*.gd to build/gdpy/gdemu.py (tools/gdport/gd2py.py).
+1. Transpile the legacy interpreter port (tools/gdport/legacy_emu/*.gd, formerly godot/emu/) to build/gdpy/gdemu.py (tools/gdport/gd2py.py).
 2. Run the CPU unit tests (tools/refemu/test_cpu.py) against the transpiled
    GDScript CPU.
 3. Differential run: boot NFL.EXE in the transpiled GDScript machine
@@ -33,7 +33,7 @@ GD_FILES = ["cpu.gd", "machine.gd", "bios.gd", "dos.gd", "video.gd", "font_cp437
 def transpile():
     os.makedirs(OUT, exist_ok=True)
     subprocess.run([sys.executable, os.path.join(HERE, "gd2py.py"), os.path.join(OUT, "gdemu.py")]
-                   + [os.path.join(ROOT, "godot", "emu", f) for f in GD_FILES], check=True)
+                   + [os.path.join(HERE, "legacy_emu", f) for f in GD_FILES], check=True)
     import gdemu
     return gdemu
 

@@ -1,24 +1,29 @@
-## Front-end for the NFL Challenge emulator.
+## Front-end for the statically recompiled NFL Challenge.
 ##
 ## * Finds the game files (res://dos_c, user://dos_c, --dos-root=<path> or a
 ##   folder picked in the app) and shows instructions if NFL.EXE is missing.
-## * Runs the emulated CPU inside a per-frame time budget; timer ticks follow
-##   real time (18.2 Hz x speed), or the instruction count in Turbo mode.
+## * The program itself is GDScript generated ahead of time from the user's
+##   NFL.EXE by tools/recomp/recompile.py (res://recomp/, not committed).  It
+##   runs on its own Thread (it blocks while it waits for a key, the way the DOS
+##   program does) on the native host layer (res://host/).  This thread only
+##   renders video memory, feeds keys and wakes the program thread; the BIOS
+##   clock follows real time x the speed setting.
 ## * Text modes are drawn by TextScreen with a vector font at the window's native
 ##   resolution, filling a 16:9 screen ("HD text"). CGA graphics (instant replay)
 ##   and the optional "retro" text view are rendered into an Image -> ImageTexture
 ##   and shown 4:3, pillarboxed.
 ## * The toolbar floats over the screen and hides itself; move the mouse to the
 ##   top edge to show it. F11 toggles fullscreen, F12 cycles the speed.
-## * Maps Godot key events to PC/XT scancodes (make + break), so the emulated
+## * Maps Godot key events to PC/XT scancodes (make + break), so the native
 ##   BIOS keyboard handler produces the right ASCII/scan words, incl. Alt/Ctrl.
 ## * Optional PC-speaker square wave through AudioStreamGenerator.
 extends Control
 
 const TICK_HZ := 18.2065
-const SPEEDS := [1.0, 2.0, 4.0, 8.0, 0.0]   # 0 = turbo (as fast as possible)
-const FRAME_BUDGET_USEC := 14000
+const SPEEDS := [1.0, 2.0, 4.0, 8.0, 0.0]   # 0 = turbo
+const TURBO_FACTOR := 32.0
 const MIX_RATE := 22050.0
+const RECOMP_DIR := "res://recomp"
 
 ## Godot physical keycode -> PC/XT set-1 scancode.
 var scancodes: Dictionary = {}
@@ -26,6 +31,9 @@ var scancodes: Dictionary = {}
 var machine: Machine = null
 var bios: BIOS = null
 var dos: DOS = null
+var host: RecompHost = null
+var thread: Thread = null
+var load_error: String = ""
 var video: Video = null
 var image: Image = null
 var texture: ImageTexture = null
@@ -51,7 +59,6 @@ var program: String = "NFL.EXE"
 var program_args: String = ""
 var speed_index: int = 0
 var paused: bool = false
-var tick_acc: float = 0.0
 var blink_timer: float = 0.0
 var blink_phase: int = 0
 var ips_timer: float = 0.0
@@ -122,7 +129,7 @@ func _pick_root() -> bool:
 
 
 func _start() -> void:
-	machine = null
+	_stop()
 	if not _pick_root():
 		_show_message(
 			"Game files not found.\n\n"
@@ -133,9 +140,16 @@ func _start() -> void:
 			+ "or press the \"Game folder...\" button above.\n\n"
 			+ "The files are not included: bring your own copy.")
 		return
+	if not ResourceLoader.exists(RECOMP_DIR + "/recomp_index.gd"):
+		_show_message(
+			"The recompiled program is missing.\n\n"
+			+ "Run the static recompiler once on your own NFL.EXE:\n\n"
+			+ "    python3 tools/recomp/recompile.py /path/to/NFL.EXE\n\n"
+			+ "It writes godot/recomp/ (generated from your copy, never committed).")
+		return
 	message.visible = false
-	machine = Machine.new(20000)
-	machine.realtime = SPEEDS[speed_index] > 0.0
+	machine = Machine.new()
+	machine.speed = _speed_factor()
 	var now := Time.get_datetime_dict_from_system()
 	var secs: int = int(now["hour"]) * 3600 + int(now["minute"]) * 60 + int(now["second"])
 	var midnight: int = int(Time.get_unix_time_from_datetime_dict(
@@ -157,9 +171,52 @@ func _start() -> void:
 		_show_message("Could not load %s from %s" % [program, dos_root])
 		machine = null
 		return
+	if int(info.get("load_seg", 0)) != 0x122:
+		_show_message("%s is not the NFL.EXE the recompiled code was made from." % program)
+		machine = null
+		return
 	machine.log_msg("[load] %s from %s %s" % [program, dos_root, str(info)])
 	video = Video.new()
-	tick_acc = 0.0
+	host = RecompHost.new()
+	load_error = ""
+	thread = Thread.new()
+	thread.start(_program_thread)
+
+
+## Program thread: load and link the generated scripts (compiling them takes a
+## moment, so not on the main thread), then run the program until it exits.
+func _program_thread() -> void:
+	var index_script: GDScript = load(RECOMP_DIR + "/recomp_index.gd")
+	if index_script == null:
+		load_error = "cannot load " + RECOMP_DIR + "/recomp_index.gd"
+		return
+	host.setup(machine, bios, dos, index_script.new(), _load_unit)
+	host.run()
+
+
+func _load_unit(unit_name: String) -> RecompUnit:
+	var scr: GDScript = load("%s/%s.gd" % [RECOMP_DIR, unit_name])
+	return scr.new()
+
+
+## Stops the program thread (reset, folder change, quit).
+func _stop() -> void:
+	if thread != null:
+		if machine != null:
+			machine.request_abort()
+		thread.wait_to_finish()
+		thread = null
+	machine = null
+	host = null
+
+
+func _exit_tree() -> void:
+	_stop()
+
+
+func _speed_factor() -> float:
+	var s: float = SPEEDS[speed_index]
+	return TURBO_FACTOR if s == 0.0 else s
 
 
 func _show_message(text: String) -> void:
@@ -259,9 +316,7 @@ func _on_speed_pressed() -> void:
 
 func _apply_speed() -> void:
 	if machine:
-		machine.realtime = SPEEDS[speed_index] > 0.0
-		if not machine.realtime:
-			machine.next_tick = machine.cpu.icount + machine.tick_len
+		machine.speed = _speed_factor()
 	var s: float = SPEEDS[speed_index]
 	speed_button.text = "Speed: %s" % ("turbo" if s == 0.0 else "%dx" % int(s))
 
@@ -269,6 +324,8 @@ func _apply_speed() -> void:
 func _on_pause_pressed() -> void:
 	paused = not paused
 	pause_button.text = "Resume" if paused else "Pause"
+	if machine:
+		machine.set_paused(paused)
 
 
 func _on_reset_pressed() -> void:
@@ -338,43 +395,27 @@ func _process(delta: float) -> void:
 	_update_toolbar(delta)
 	if machine == null:
 		return
-	if not paused and not machine.exited:
-		_run_frame(delta)
+	machine.wake()
 	_update_video(delta)
 	_update_audio()
 	ips_timer += delta
 	if ips_timer >= 1.0:
-		ips = (machine.cpu.executed - ips_last) / ips_timer
-		ips_last = machine.cpu.executed
+		ips = (machine.cpu.icount - ips_last) / ips_timer
+		ips_last = machine.cpu.icount
 		ips_timer = 0.0
-	var state := "exited (code %d)" % machine.exit_code if machine.exited else (
-		"paused" if paused else "running")
-	hud.text = "%s | %.2f M instr/s | ticks %d | mode %d" % [
-		state, ips / 1.0e6, machine.ticks, machine.rb(BIOS.BDA_MODE)]
-
-
-func _run_frame(delta: float) -> void:
-	var start := Time.get_ticks_usec()
-	var spd: float = SPEEDS[speed_index]
-	if spd > 0.0:
-		tick_acc += delta * TICK_HZ * spd
-		var n := 0
-		while tick_acc >= 1.0 and n < 8:
-			machine.tick()
-			tick_acc -= 1.0
-			n += 1
-		if tick_acc > 8.0:
-			tick_acc = 0.0
-		while Time.get_ticks_usec() - start < FRAME_BUDGET_USEC and not machine.exited:
-			var before := machine.cpu.icount
-			machine.pump_keyboard()
-			machine.run(4000)
-			if machine.cpu.icount == before:
-				break       # idle until the next tick
-	else:
-		while Time.get_ticks_usec() - start < FRAME_BUDGET_USEC and not machine.exited:
-			machine.pump_keyboard()
-			machine.run(4000)
+	var state := "running"
+	if load_error != "":
+		state = load_error
+	elif host != null and host.error_msg != "":
+		state = "stopped: " + host.error_msg
+	elif machine.exited:
+		state = "exited (code %d)" % machine.exit_code
+	elif host == null or host.units.is_empty():
+		state = "loading recompiled code..."
+	elif paused:
+		state = "paused"
+	hud.text = "%s | %.0f services/s | ticks %d | mode %d" % [
+		state, ips, machine.ticks, machine.rb(BIOS.BDA_MODE)]
 
 
 func _update_video(delta: float) -> void:
@@ -438,7 +479,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	else:
 		seq.append(sc | 0x80)
 	machine.key_scancodes(seq)
-	machine.pump_keyboard()
 	get_viewport().set_input_as_handled()
 
 

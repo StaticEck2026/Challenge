@@ -1,33 +1,39 @@
-# NFL Challenge in Godot 4 (PC emulator in GDScript)
+# NFL Challenge in Godot 4 (statically recompiled)
 
-This Godot 4.3+ project runs the **original, unmodified** DOS program `NFL.EXE`
-(XOR Corporation, *NFL Challenge* v2.01, 1989) by emulating the machine it was
-written for: an 8086/80186 CPU, the parts of the PC BIOS, DOS 3.30 and CGA
-hardware that the program uses, all in GDScript (`emu/`). There is no game code
-or game data in this project. **Bring your own copy of the game.**
+This Godot 4.3+ project runs the DOS program `NFL.EXE` (XOR Corporation,
+*NFL Challenge* v2.01, 1989) as **GDScript recompiled ahead of time from your
+own copy**. The translator `tools/recomp/recompile.py` turns every 8086
+function of the program into a GDScript function in `recomp/`. The scripts in
+`host/` provide what the program expects from the PC: DOS file services on
+`FileAccess`, the BIOS keyboard and video services, the PLINK86 overlay
+manager, the clock and the PC speaker. `main.gd` and `text_screen.gd` draw the
+screen and take your keys. There is no 8086 interpreter, and no game code or
+game data, in this project. **Bring your own copy of the game.**
+`docs/RECOMPILATION.md` explains the design.
 
-> **Status: the GDScript build was NOT executed in the development sandbox**
+> **Status: this Godot project was NOT executed in the development sandbox**
 > (no Godot binary could be downloaded or run there). What was verified:
 >
-> * every `.gd` file parses with `gdparse` and passes `gdlint` (relaxed limits in
->   `gdlintrc`, because the emulator core mirrors the Python reference emulator
->   one function per opcode group / service);
-> * `tools/check_port.py` confirms that every opcode, interrupt vector, INT
->   sub-function (AH/AL) and I/O port handled by the Python reference emulator
->   (`tools/refemu/`) is handled in the GDScript port too;
-> * `tools/gdport/test_gdport.py` transpiles `emu/*.gd` to Python (a test-only
->   GDScript subset translator plus a shim of the Godot API calls used) and
->   (a) runs the 87 CPU unit tests against the GDScript CPU, (b) runs `NFL.EXE`
->   in the GDScript machine in lockstep with the Python oracle, comparing
->   registers/flags every 1000 instructions and the whole 1 MB of memory every
->   5M instructions. They were identical through the configuration dialog,
->   `config.nfl` creation, team selection and roster loading, and through a
->   complete `/s` season game (110M instructions; both wrote a byte-identical
->   `stats.log`). The GDScript renderer produced the same pixels as the oracle.
->   See `docs/EMULATION_NOTES.md`.
+> * every `.gd` file, the generated ones included, parses with `gdparse` and
+>   passes `gdlint` (`gdlintrc` here; the recompiler writes a relaxed
+>   `recomp/gdlintrc` for machine-written code);
+> * `tools/recomp/lockstep.py` translates `host/*.gd` and the generated
+>   `recomp/*.gd` to Python (`tools/gdport/gd2py.py`, a test-only GDScript
+>   subset translator, plus a shim of the Godot API calls used) and runs them in
+>   lockstep with the Python oracle (`tools/refemu/`, the old interpreter)
+>   under a shared deterministic clock. A complete `/s` season game was
+>   identical at every one of 728,068 service calls and at every memory
+>   checkpoint, and wrote a byte-identical `stats.log`. The boot scenario
+>   matches as well: the configuration dialog, team selection, roster load and
+>   a game with instant replay, with the CGA video memory identical at all
+>   4,137 ticks in graphics mode. See `docs/EMULATION_NOTES.md`;
+> * `tools/recomp/thread_smoke.py` runs the same code with the realtime clock
+>   on a Python thread, driven by a 60 Hz "main thread" exactly as `main.gd`
+>   drives it (keys through the mutex-guarded queue, wake-ups, abort and join).
 >
-> `main.gd` (window, input, rendering, audio, file dialog) uses Godot APIs that
-> could not be exercised at all. Expect small fixes on the first real run.
+> Godot itself never compiled the about 490,000 generated lines and never
+> ran the `Thread`, `main.gd` (window, input, rendering, audio, file dialog) or
+> `text_screen.gd`. Expect small fixes on the first real run.
 
 ## Install the game files
 
@@ -49,8 +55,22 @@ or game data in this project. **Bring your own copy of the game.**
    and pick any folder that contains `NFL.EXE`. If nothing is found, the app
    shows these instructions on screen.
 
-2. Open the `godot/` folder in the Godot 4.3+ editor once (it imports the
-   scripts and registers the `class_name`s), then press **Play**.
+2. **Recompile your NFL.EXE once** (Python 3, no other dependencies):
+
+   ```sh
+   python3 tools/recomp/recompile.py godot/dos_c/NFL.EXE
+   ```
+
+   This writes about 24 scripts (about 10 MB of GDScript) to `godot/recomp/`
+   in a couple of seconds. The folder is in `.gitignore`. The code is derived
+   from your copyrighted binary, so never commit or distribute it. Run the
+   command again after updating the translator. Without `recomp/`, the app
+   shows this instruction.
+
+3. Open the `godot/` folder in the Godot 4.3+ editor once (it imports the
+   scripts and registers the `class_name`s), then press **Play**. On start the
+   program thread loads the recompiled scripts. The HUD says
+   "loading recompiled code..." until it has compiled them.
 
 ### Drives
 
@@ -81,7 +101,7 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 | `--dos-root=<path>` | folder with `NFL.EXE` |
 | `--args=<tail>` | DOS command tail for the program: `/i` instant replay on, `/s` season mode (reads `season.nfl` from the team disk, computer coaches, writes `stats.log`, exits), `/r` restore a saved game, `/l` log mode |
 | `--team-dir=<sub>` | sub-folder mapped as drive `D:` (default `89`) |
-| `--program=<file>` | run another program, e.g. `--program=SEASON.COM` to build `season.nfl` (answer `D` for the team-disk drive) |
+| `--program=<file>` | name of the program file in the game folder (default `NFL.EXE`). Only `NFL.EXE` is recompiled, so other programs such as `SEASON.COM` cannot run in this build. Build `season.nfl` with SEASON.COM under DOS or in `tools/refemu/` (`scenarios.py season`), or write it by hand: the number of games, then one `Home Visitor` line per game, for example `1`, then `Bills Dolphins` |
 | `--turbo` | start in turbo speed |
 | `--mute` | no PC-speaker sound |
 | `--fullscreen` | start in fullscreen |
@@ -90,8 +110,8 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 
 ## Keys
 
-Every key is passed to the emulated keyboard as a PC/XT scan code (make and
-break), so the emulated BIOS produces the same ASCII/scan words as a real PC,
+Every key is passed to the keyboard as a PC/XT scan code (make and break), so
+the BIOS keyboard handler produces the same ASCII/scan words as a real PC,
 including **Shift**, **Ctrl** and **Alt** combinations (for example **Alt+E**
 "extra-extra-fast", **Alt+L** log mode, **Alt+T** clock, **Alt+S** save at
 half time), **F1-F10**, arrows, **PgUp/PgDn**, **Home/End**, **Ins/Del** and
@@ -105,11 +125,11 @@ paused).
 
 | Key / button | Action |
 |--------------|--------|
-| **F12** / *Speed* | cycle 1x, 2x, 4x, 8x, turbo. At 1x-8x the 18.2 Hz PC timer follows real time (times the factor); in turbo the timer is derived from the instruction count and the CPU runs flat out |
+| **F12** / *Speed* | cycle 1x, 2x, 4x, 8x, turbo (32x). The 18.2 Hz PC clock follows real time times the factor. The game paces itself only by that clock, so everything gets faster |
 | **F11** / *Fullscreen* | toggle fullscreen (F11 is not passed to the game: it has no use for it) |
 | *Text: HD / retro* | HD vector-font text (default) or the original 8x16 bitmap text, 4:3 |
 | *Colors: classic / modern* | the 16 CGA colours, or a softer modern palette with the same hues (HD text only) |
-| *Pause* | pause / resume emulation |
+| *Pause* | pause / resume the program (its thread waits) |
 | *Reset* | reboot the program |
 | *Game folder...* | pick the folder with `NFL.EXE` |
 | *Screenshot* | save what is on screen to `user://screenshot_<time>.png` |
@@ -143,37 +163,50 @@ drawn with Pillow) and renders real game screens at 1920x1080 without Godot:
 ## How it works
 
 ```
-main.gd            front-end: frame loop, timer ticks, Image/ImageTexture output (4:3), keyboard, audio
-emu/cpu.gd         8086 + 80186 CPU (two-level match dispatch, eager flags, F1 nn emulator trap)
-emu/machine.gd     memory map, BIOS ROM stubs (F1 nn CF per vector), IVT, 8259 PIC, 8253 PIT,
-                   CGA status/mode ports, keyboard controller, speaker
-emu/bios.gd        INT 08/09 (tick, keyboard -> BDA ring buffer), 10h video (text + CGA 4/5/6),
-                   11h 12h 13h 14h 15h 16h 17h 1Ah
-emu/dos.gd         MZ/COM loader, PSP, environment, MCB chain, INT 20h/21h (handles, FCBs,
-                   memory, find first/next, console), case-insensitive 8.3 drive mapping
-emu/video.gd       incremental renderer (only changed cells/bytes are redrawn) + text dump
-emu/font_cp437.gd  8x8 / 8x16 CP437 bitmap font (see docs/FONT_LICENSE.txt)
+recomp/            GENERATED from your NFL.EXE by tools/recomp/recompile.py (gitignored):
+                   u_r_N.gd root code, u_oNN_M.gd overlay N, recomp_index.gd dispatch table
+main.gd            front-end: starts the program thread, renders, keyboard, audio, folder picker
+host/recomp_host.gd   runtime: links the units, native PLINK86 start-up and overlay manager,
+                   ROM-stub services (INT n and int86()), dispatcher for indirect transfers
+host/recomp_unit.gd   base class of the generated scripts
+host/cpu_state.gd  registers, flags and the 1 MB memory (no decoder)
+host/machine.gd    ROM stubs/IVT/BDA, I/O ports, keyboard queue, clock, service dispatcher
+host/bios.gd       INT 10h video (text + CGA 4/5/6), 16h keyboard (BDA ring buffer), 1Ah, ...
+host/dos.gd        MZ loader, PSP, environment, MCB chain, INT 21h (handles, FCBs, memory,
+                   find first/next, console), case-insensitive 8.3 drive mapping
+host/video.gd      incremental bitmap renderer (CGA, retro text) + text dump
+host/font_cp437.gd 8x8 / 8x16 CP437 bitmap font (see docs/FONT_LICENSE.txt)
 ```
 
-Each module is a one-to-one port of the Python reference emulator in
-`tools/refemu/` (same function names), which is what was run and tested.
-`NFL.EXE` calls the BIOS through a C-runtime `int86()` that builds an interrupt
-frame and jumps through the vector table, so services are implemented where
-the vectors point (ROM stubs containing the `F1 nn` trap), not by intercepting
-`INT` opcodes.
+The recompiled program runs on its own `Thread`. Its code is nested and
+blocking: it waits for a key inside the C runtime, like the DOS program does.
+When it waits, it sleeps on a `Semaphore` that the main thread posts every
+frame and whenever a key arrives. The main thread renders video memory and
+feeds keys through a mutex-guarded queue. Reset and quit stop the thread
+cleanly. Details are in `docs/RECOMPILATION.md`.
 
 ## Performance
 
-The Python reference emulator executes about 0.8M instructions per second
-under CPython; a full computer-vs-computer season game in extra-extra-fast mode
-is about 74M executed instructions. GDScript speed was not measured (no
-Godot binary); it is expected to be of the same order, which is about the
-speed of the 4.77 MHz PC the game was written for. If the game feels slow, use
-**F12** to raise the speed. The HUD shows the measured instructions per second.
+In the sandbox, the recompiled program translated to Python ran a complete
+`/s` season game (194M 8086 instructions in the oracle) in 49 s, which is about
+4 million original instructions per second. The Python interpreter (the
+oracle) took 246 s. The retired GDScript interpreter, translated to Python the
+same way, runs about 0.55 million instructions per second, which would be
+about 350 s; that figure is extrapolated, not timed over the whole game.
+GDScript speed was not measured (no Godot binary). It does not need to match:
+the game is paced by the 18.2 Hz clock, and the original PC ran about 0.4
+million instructions per second. **F12** raises the speed. The HUD shows the
+service calls per second.
 
 ## Known gaps
 
 * Not run in Godot (see the status box above); `main.gd` is untested.
+* `recomp/` must be regenerated (one command, above) for every fresh checkout:
+  it is not committed. The translator targets this exact `NFL.EXE` (v2.01,
+  8/8/89). `main.gd` refuses a program that loads at another segment.
+* A code path that the profiling runs never reached and that uses a new
+  indirect jump target stops with `dispatch miss at SSSS:OOOO` on the HUD.
+  See "Limitations" in `docs/RECOMPILATION.md`.
 * Exported builds: Godot only packs resource files by default, so put the game
   files in `user://dos_c/` or use `--dos-root` instead of `res://dos_c/`.
 * Truncating a file with a zero-length write (`INT 21h AH=40h CX=0`) is ignored

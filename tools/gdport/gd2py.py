@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Transpile the GDScript subset used by godot/emu/*.gd into one Python module.
+"""Transpile the GDScript subset used by godot/host/*.gd, the generated
+godot/recomp/*.gd and tools/gdport/legacy_emu/*.gd into one Python module.
 
 This exists only to *test* the GDScript port without a Godot binary: the
 generated module runs on tools/gdport/gdrt.py (a shim of the Godot API calls
@@ -9,7 +10,9 @@ else/while/for, match (-> Python match/case), member access without `self`,
 `X.new()`, builtin String/Array/Dictionary/Packed*Array methods (-> gdcall),
 `"fmt" % [..]`, integer `/`, lambdas `func(a, b): return e`, and `as T` casts.
 
-Usage: python3 tools/gdport/gd2py.py out.py godot/emu/cpu.gd godot/emu/machine.gd ...
+Usage: python3 tools/gdport/gd2py.py out.py godot/host/machine.gd godot/recomp/u_r_0.gd ...
+A file without class_name becomes a class named after the file; `extends X` of a
+translated class X becomes Python inheritance.
 """
 import re
 import sys
@@ -95,6 +98,7 @@ def logical_lines(text):
 class ClassInfo:
     def __init__(self, name):
         self.name = name
+        self.base = None    # name of a translated base class (``extends X``)
         self.consts = []    # (name, expr)
         self.vars = []      # (name, type, expr)
         self.funcs = []     # (name, params, static, body[(indent, text)])
@@ -107,7 +111,9 @@ class ClassInfo:
 
 
 def parse_file(path):
+    import os
     lines = list(logical_lines(open(path).read()))
+    stem = os.path.splitext(os.path.basename(path))[0]
     outer = None
     classes = []
     cur = None
@@ -132,9 +138,12 @@ def parse_file(path):
             cur = outer
             base_indent = 0
         if cur is None:
-            cur = outer = ClassInfo("Main")
+            cur = outer = ClassInfo(stem)
             classes.append(cur)
         if text.startswith("extends "):
+            base = text.split()[1]
+            if base not in ("RefCounted", "Node", "Object", "Control", "Resource") and not base.startswith('"'):
+                cur.base = base
             i += 1
             continue
         if ind == base_indent and text.startswith("const "):
@@ -186,6 +195,11 @@ class Translator:
     def __init__(self, cls, all_classes):
         self.cls = cls
         self.members = cls.members()
+        by_name = {c.name: c for c in all_classes}
+        b = cls.base
+        while b in by_name:
+            self.members |= by_name[b].members()
+            b = by_name[b].base
         self.statics = cls.statics()
         self.consts = {c[0] for c in cls.consts}
         self.class_names = {c.name for c in all_classes}
@@ -376,12 +390,27 @@ def translate(classes_by_file):
         for name, e in c.consts:
             out.append("%s = %s" % (name, tr.expr(e, set(), True)))
     out.append("")
+    # base classes first
+    names = {c.name for c in all_classes}
+    ordered, done = [], set()
+
+    def visit(c):
+        if c.name in done:
+            return
+        if c.base in names:
+            visit(next(x for x in all_classes if x.name == c.base))
+        done.add(c.name)
+        ordered.append(c)
     for c in all_classes:
+        visit(c)
+    for c in ordered:
         tr = Translator(c, all_classes)
-        out.append("class %s:" % c.name)
+        out.append("class %s%s:" % (c.name, "(%s)" % c.base if c.base in names else ""))
         for name, e in c.consts:
             out.append("    %s = %s" % (name, name))
         out.append("    def __init__(self, *a):")
+        if c.base in names:
+            out.append("        %s.__init__(self)" % c.base)
         for name, typ, e in c.vars:
             out.append("        self.%s = %s" % (name, tr.expr(e, set()) if e is not None else default_for(typ)))
         if any(f[0] == "_init" for f in c.funcs):

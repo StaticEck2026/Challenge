@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check the GDScript port (godot/emu/*.gd) against the Python oracle
+"""Cross-check the legacy GDScript interpreter port (tools/gdport/legacy_emu/*.gd) against the Python oracle
 (tools/refemu/*.py).
 
 Checks:
@@ -22,7 +22,7 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = os.path.join(ROOT, "tools", "refemu")
-GD = os.path.join(ROOT, "godot", "emu")
+GD = os.path.join(ROOT, "tools", "gdport", "legacy_emu")
 sys.path.insert(0, PY)
 
 MODULES = ["cpu", "machine", "bios", "dos", "video"]

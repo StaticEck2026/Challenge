@@ -1,6 +1,7 @@
 """Runtime shim for GDScript code transpiled by gd2py.py.
 
-Provides the subset of the Godot 4 API that godot/emu/*.gd uses: packed arrays,
+Provides the subset of the Godot 4 API that godot/host/*.gd, the generated
+godot/recomp/*.gd and the legacy interpreter (legacy_emu/) use: packed arrays,
 String/Array/Dictionary methods (dispatched by gdcall), FileAccess, DirAccess,
 Time, and the global helper functions.  It is a test harness, not a Godot
 replacement: semantics follow the Godot documentation for the calls used.
@@ -113,8 +114,10 @@ def gdcall(obj, name, *args):
         return _list_method(obj, name, args)
     if isinstance(obj, dict):
         return _dict_method(obj, name, args)
-    if name == "call" and callable(obj):
-        return obj(*args)
+    if name == "call":
+        if callable(obj):
+            return obj(*args)
+        return getattr(obj, args[0])(*args[1:])
     return getattr(obj, name)(*args)
 
 
@@ -412,3 +415,59 @@ class Time:
     def get_ticks_usec():
         import time
         return int(time.time() * 1e6)
+
+
+class Callable:
+    """Callable() (invalid) or a wrapper around a Python callable."""
+
+    def __init__(self, fn=None, method=None):
+        if method is not None:
+            fn = getattr(fn, method)
+        self.fn = fn
+
+    def is_valid(self):
+        return self.fn is not None
+
+    def call(self, *a):
+        return self.fn(*a)
+
+    def __call__(self, *a):
+        return self.fn(*a)
+
+
+class Mutex:
+    """Godot Mutex on threading.RLock (Godot mutexes are recursive)."""
+
+    def __init__(self):
+        import threading
+        self._m = threading.RLock()
+
+    def lock(self):
+        self._m.acquire()
+
+    def unlock(self):
+        self._m.release()
+
+
+class Semaphore:
+    def __init__(self):
+        import threading
+        self._s = threading.Semaphore(0)
+
+    def post(self):
+        self._s.release()
+
+    def wait(self):
+        self._s.acquire()
+
+
+class OS:
+    @staticmethod
+    def delay_usec(n):
+        import time
+        time.sleep(n / 1e6)
+
+    @staticmethod
+    def delay_msec(n):
+        import time
+        time.sleep(n / 1e3)

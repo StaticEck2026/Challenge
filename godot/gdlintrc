@@ -1,6 +1,6 @@
-# Relaxed limits for the emulator core: cpu.gd/bios.gd/dos.gd mirror the Python
-# reference emulator one-to-one (one function per opcode group / service), so
-# they are long files with many public methods and early-return error paths.
+# Relaxed limits for the host layer: bios.gd/dos.gd mirror the Python reference
+# emulator one function per service, so they are long files with many public
+# methods and early-return error paths. Generated code: see recomp/gdlintrc.
 class-definitions-order:
 - tools
 - classnames

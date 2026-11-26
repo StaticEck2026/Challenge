@@ -1,7 +1,12 @@
 # Emulation notes
 
 How `NFL.EXE` is run: by the Python reference emulator (`tools/refemu/`, the
-"oracle") and by its one-to-one GDScript port (`godot/emu/`). This file lists
+"oracle"), and in Godot as **statically recompiled GDScript** on a native host
+layer (`godot/host/`, see `docs/RECOMPILATION.md` and the section "Static
+recompilation" at the end). The GDScript interpreter that `godot/emu/` used
+to contain was retired to `tools/gdport/legacy_emu/`. It is kept only for
+reference and for the speed comparison, and the sections about the "GDScript
+port" below describe it. This file lists
 the services the program really uses (measured with `--trace-ints`), the quirks
 we hit, the performance, and the commands that reproduce every claim. Static
 analysis of the binary is in `docs/NFL_EXE_ANALYSIS.md`.
@@ -188,3 +193,63 @@ python3 -I tools/gdport/test_gdport.py --game-dir $G --minstr 200 \
 `{Alt-E}` `{Ctrl-C}` `{Down}` ... are keys; `{wait:N}` waits N ticks;
 `{when:TEXT}` waits until TEXT is on the text screen; `{shot:NAME}` saves
 `NAME.png` and `NAME.txt`.
+
+## Static recompilation (current Godot build)
+
+The Godot project runs GDScript produced by `tools/recomp/recompile.py` from
+the user's `NFL.EXE`. The run produces 759 functions, 97,231 translated
+instructions and 14,044 basic blocks, written to 23 scripts (about 494,000
+lines, 10 MB) in about 2 s. Everything below was run in this sandbox. The
+code under test is the generated GDScript plus `godot/host/*.gd`, translated
+to Python by `tools/gdport/gd2py.py`. No Godot binary was available.
+
+| Check | Command | Result |
+|-------|---------|--------|
+| Coverage | `coverage.py build/recomp/profile_{boot,season,replay}.json` | 315,902 executed (variant, address) pairs over the three profiles. The replay profile repeats the boot run, so 145,545 pairs are unique (57,015 distinct addresses). **100.000% of them are covered** by translated code, 0 missing. The natively replaced code is counted separately: ROM stubs, the PLINK86 manager (6,729 addresses), the thunks and the two switch helpers |
+| Instruction semantics | `test_translate.py --count 3000 --length 20 --seed 11` | 3,000/3,000 random snippets agree with the oracle CPU (all registers, the 6 arithmetic flags, DF, data and stack memory, all flags live at the end). The test found one translator bug (a fused `xor` + `jp/jnp` emitted the XOR twice), now fixed. A mutation (a wrong OF formula) is detected |
+| Season | `lockstep.py season` | `NFL /s`, extra-extra-fast, the whole game to its exit (code 147 on both sides): **identical at all 728,068 service calls and 364 memory checkpoints; `STATS.LOG` byte-identical** (4,991 bytes, sha1 `09d8fd11b542...`). `CONFIG.NFL` and the 77 graphics-mode ticks (title screen) are identical too, with 0 dispatch misses and 33 overlay loads |
+| Boot + instant replay | `lockstep.py boot` | `NFL /i` without `config.nfl`: the CONFIGURATION dialog, team selection, coach selection, roster load, then 8,000 ticks of a game with instant replay. **Identical at all 541,803 service calls, 270 memory checkpoints and 9 script screens. The video memory was identical at all 4,137 ticks spent in CGA mode 4** (title and instant-replay field view). `CONFIG.NFL` byte-identical, 0 dispatch misses, 43 overlay loads. Frames from the recompiled run are in `build/recomp/shots-boot/` |
+| Thread model | `thread_smoke.py` | the realtime clock on a Python thread with a 60 Hz main loop: CONFIGURATION after 2.5 s, team selection, roster load and the game screen (`Timeouts`) after 8.5 s (speed 4x); `request_abort()` joined the program thread at once |
+| GDScript syntax | `gdparse`; `gdlint` (`godot/`: `main.gd text_screen.gd host/*.gd`; `godot/recomp/`: relaxed `gdlintrc`) | all files pass |
+| No interpreter | `grep -rn "match op\|fetch8\|exec_op\|modrm" godot/ --include=*.gd` | no matches |
+
+**Deterministic clock for lockstep.** The oracle's timer IRQ fires at
+arbitrary instructions, which a recompiled program cannot reproduce. Both
+sides therefore advance the BIOS tick every 64 polls (service calls through a
+ROM stub, plus port reads) and whenever a service blocks. Keys are delivered
+at ticks through the BIOS keyboard handler logic. The oracle's idle
+fast-forward heuristic is off.
+
+**Quirks found while bringing it up:**
+* `13F3:0E6D` is a call-through-far-pointer trampoline (pop the return
+  address and the far pointer argument, push them back swapped, RETF). The
+  profile shows its RETF going to a function, so the translation makes it a
+  dispatch.
+* The soft-float package saves registers with helpers that return through
+  `jmp [bp+10h]`, and its routines RETF past the helper's frame. The
+  translation propagates such returns upward (stack unwinding) until a frame
+  expects the address.
+* The PLINK86 start-up leaves BP, SI, DI and DX holding values from loading
+  overlay 12 (the last fixup offset, 0090h, 00C0h and the load segment) when
+  it jumps to the C start-up. The native start-up sets the same values.
+* Uninitialised fields of the `REGS` struct passed to `int86()` hold stack
+  residue. The original's residue there is the overlay manager's scratch
+  values, which the native manager does not reproduce. These fields reach
+  only registers that the services ignore. See "Limitations" in
+  `docs/RECOMPILATION.md` for how the lockstep compare handles them.
+
+**Speed** (CPython 3.13, this sandbox):
+
+| Run | Time | Rate (original 8086 instructions) |
+|-----|------|-----------------------------------|
+| oracle (Python interpreter), `/s` game, 193.8M instructions, deterministic clock | 245.8 s | 0.79 M/s |
+| recompiled GDScript translated to Python, same game | 48.8 s | 4.0 M/s (**5.0x the interpreter**) |
+| oracle, boot scenario (175.7M instructions) | 227.2 s | 0.77 M/s |
+| recompiled, boot scenario | 42.5 s | 4.1 M/s (5.3x) |
+| retired GDScript interpreter translated to Python (`legacy_emu/`), first 2.1M instructions of `/s` | 3.8 s | 0.55 M/s (the recompiled code is about 7x faster) |
+
+The recompiled run spends most of its time in the game's own busy-wait: it
+polls `int86(21h, AH=2Ch)` (and the ROM stub, service and dispatch around
+it) hundreds of thousands of times. With the realtime clock in Godot those
+loops simply run until real time has passed. GDScript speed was not
+measured.

@@ -1,0 +1,10 @@
+{
+  "_doc": "Address-keyed translation hints for NFL.EXE v2.01 (link segments, i.e. load base 0). See docs/RECOMPILATION.md.",
+  "ret_via_jmp": [
+    {"site": "13F3:0132", "helper": "13F3:0128",
+     "evidence": "13F3:0128 pushes es ax bx cx dx si di bp, mov bp,sp, then 'jmp [bp+0x10]' = its own near return address: the jump returns to the instruction after each 'call 0x128'"},
+    {"site": "13F3:017E", "helper": "13F3:0174",
+     "evidence": "13F3:0174 is the same register-saving helper as 0128 ('jmp [bp+0x10]' to its return address); called from 20 soft-float routines"}
+  ],
+  "jump_targets": []
+}
