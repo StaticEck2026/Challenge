@@ -4,7 +4,12 @@
 ##   folder picked in the app) and shows instructions if NFL.EXE is missing.
 ## * Runs the emulated CPU inside a per-frame time budget; timer ticks follow
 ##   real time (18.2 Hz x speed), or the instruction count in Turbo mode.
-## * Renders text / CGA video memory into an Image -> ImageTexture, 4:3.
+## * Text modes are drawn by TextScreen with a vector font at the window's native
+##   resolution, filling a 16:9 screen ("HD text"). CGA graphics (instant replay)
+##   and the optional "retro" text view are rendered into an Image -> ImageTexture
+##   and shown 4:3, pillarboxed.
+## * The toolbar floats over the screen and hides itself; move the mouse to the
+##   top edge to show it. F11 toggles fullscreen, F12 cycles the speed.
 ## * Maps Godot key events to PC/XT scancodes (make + break), so the emulated
 ##   BIOS keyboard handler produces the right ASCII/scan words, incl. Alt/Ctrl.
 ## * Optional PC-speaker square wave through AudioStreamGenerator.
@@ -25,6 +30,10 @@ var video: Video = null
 var image: Image = null
 var texture: ImageTexture = null
 var tex_rect: TextureRect = null
+var text_screen: TextScreen = null
+var toolbar: PanelContainer = null
+var hd_button: Button = null
+var colors_button: Button = null
 var aspect: AspectRatioContainer = null
 var hud: Label = null
 var message: Label = null
@@ -49,6 +58,8 @@ var ips_timer: float = 0.0
 var ips_last: int = 0
 var ips: float = 0.0
 var sound_on: bool = true
+var hd_text: bool = true
+var start_fullscreen: bool = false
 
 
 func _ready() -> void:
@@ -57,6 +68,9 @@ func _ready() -> void:
 	_parse_args()
 	_start()
 	_apply_speed()
+	_apply_view_buttons()
+	if start_fullscreen:
+		_toggle_fullscreen()
 
 
 # ------------------------------------------------------------------ setup
@@ -74,6 +88,12 @@ func _parse_args() -> void:
 			speed_index = SPEEDS.size() - 1
 		elif a == "--mute":
 			sound_on = false
+		elif a == "--retro":
+			hd_text = false
+		elif a == "--modern-colors":
+			text_screen.set_modern_colors(true)
+		elif a == "--fullscreen":
+			start_fullscreen = true
 
 
 func _has_game(dir: String) -> bool:
@@ -152,31 +172,53 @@ func _build_ui() -> void:
 	bg.color = Color.BLACK
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
-	var vbox := VBoxContainer.new()
-	vbox.set_anchors_preset(Control.PRESET_FULL_RECT)
-	add_child(vbox)
-	var bar := HBoxContainer.new()
-	vbox.add_child(bar)
-	speed_button = _add_button(bar, "Speed: 1x", _on_speed_pressed)
-	pause_button = _add_button(bar, "Pause", _on_pause_pressed)
-	_add_button(bar, "Reset", _on_reset_pressed)
-	_add_button(bar, "Game folder...", _on_folder_pressed)
-	_add_button(bar, "Screenshot", _on_screenshot_pressed)
-	_add_button(bar, "Sound", _on_sound_pressed)
-	hud = Label.new()
-	hud.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	hud.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	bar.add_child(hud)
+	# The emulated screen fills the whole window: HD text or the 4:3 bitmap view.
+	text_screen = TextScreen.new()
+	text_screen.set_anchors_preset(Control.PRESET_FULL_RECT)
+	add_child(text_screen)
+	var ui_theme := Theme.new()
+	ui_theme.default_font = text_screen.font
+	ui_theme.default_font_size = 18
+	theme = ui_theme
 	aspect = AspectRatioContainer.new()
+	aspect.set_anchors_preset(Control.PRESET_FULL_RECT)
 	aspect.ratio = 4.0 / 3.0
 	aspect.stretch_mode = AspectRatioContainer.STRETCH_FIT
-	aspect.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	vbox.add_child(aspect)
+	aspect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(aspect)
 	tex_rect = TextureRect.new()
 	tex_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	tex_rect.stretch_mode = TextureRect.STRETCH_SCALE
 	tex_rect.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	aspect.add_child(tex_rect)
+	# Floating toolbar along the top edge (auto-hides, see _update_toolbar).
+	toolbar = PanelContainer.new()
+	toolbar.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.06, 0.07, 0.09, 0.88)
+	panel_style.content_margin_left = 10
+	panel_style.content_margin_right = 10
+	panel_style.content_margin_top = 6
+	panel_style.content_margin_bottom = 6
+	toolbar.add_theme_stylebox_override("panel", panel_style)
+	add_child(toolbar)
+	var bar := HBoxContainer.new()
+	bar.add_theme_constant_override("separation", 8)
+	toolbar.add_child(bar)
+	speed_button = _add_button(bar, "Speed: 1x", _on_speed_pressed)
+	pause_button = _add_button(bar, "Pause", _on_pause_pressed)
+	_add_button(bar, "Reset", _on_reset_pressed)
+	_add_button(bar, "Game folder...", _on_folder_pressed)
+	hd_button = _add_button(bar, "Text: HD", _on_hd_pressed)
+	colors_button = _add_button(bar, "Colors: classic", _on_colors_pressed)
+	_add_button(bar, "Fullscreen (F11)", _toggle_fullscreen)
+	_add_button(bar, "Screenshot", _on_screenshot_pressed)
+	_add_button(bar, "Sound", _on_sound_pressed)
+	hud = Label.new()
+	hud.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hud.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	hud.add_theme_color_override("font_color", Color(0.65, 0.7, 0.78))
+	bar.add_child(hud)
 	message = Label.new()
 	message.set_anchors_preset(Control.PRESET_FULL_RECT)
 	message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -246,17 +288,54 @@ func _on_sound_pressed() -> void:
 	sound_on = not sound_on
 
 
+func _on_hd_pressed() -> void:
+	hd_text = not hd_text
+	_apply_view_buttons()
+
+
+func _on_colors_pressed() -> void:
+	text_screen.set_modern_colors(not text_screen.modern_colors)
+	_apply_view_buttons()
+
+
+func _apply_view_buttons() -> void:
+	hd_button.text = "Text: HD" if hd_text else "Text: retro"
+	colors_button.text = "Colors: modern" if text_screen.modern_colors else "Colors: classic"
+	if video:
+		video.last_mode = -1      # force a full bitmap repaint when switching back
+
+
+func _toggle_fullscreen() -> void:
+	var win := get_window()
+	if win.mode == Window.MODE_FULLSCREEN or win.mode == Window.MODE_EXCLUSIVE_FULLSCREEN:
+		win.mode = Window.MODE_MAXIMIZED
+	else:
+		win.mode = Window.MODE_FULLSCREEN
+
+
+## Shows the toolbar while the mouse is near the top edge, when paused, or when
+## a message is up; otherwise fades it out so the game fills the screen.
+func _update_toolbar(delta: float) -> void:
+	var mouse_y := get_viewport().get_mouse_position().y
+	var want := mouse_y < toolbar.size.y + 24.0 or paused or message.visible or machine == null
+	var target := 1.0 if want else 0.0
+	toolbar.modulate.a = move_toward(toolbar.modulate.a, target, delta * 6.0)
+	toolbar.visible = toolbar.modulate.a > 0.01
+
+
 func _on_screenshot_pressed() -> void:
-	if image == null:
+	var shot := get_viewport().get_texture().get_image()
+	if shot == null:
 		return
 	var path := "user://screenshot_%d.png" % Time.get_unix_time_from_system()
-	image.save_png(path)
+	shot.save_png(path)
 	if machine:
 		machine.log_msg("[shot] " + ProjectSettings.globalize_path(path))
 
 
 # ------------------------------------------------------------- main loop
 func _process(delta: float) -> void:
+	_update_toolbar(delta)
 	if machine == null:
 		return
 	if not paused and not machine.exited:
@@ -303,6 +382,14 @@ func _update_video(delta: float) -> void:
 	if blink_timer >= 0.267:
 		blink_timer = 0.0
 		blink_phase ^= 1
+	var md := machine.rb(BIOS.BDA_MODE)
+	var text_mode := md <= 3 or md == 7
+	var use_hd := hd_text and text_mode
+	text_screen.visible = use_hd
+	aspect.visible = not use_hd
+	if use_hd:
+		text_screen.refresh(machine, blink_phase)
+		return
 	if video.render(machine, blink_phase) or image == null:
 		var w := video.width
 		var h := video.height
@@ -334,6 +421,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var k := event as InputEventKey
 	var code: int = k.physical_keycode if k.physical_keycode != KEY_NONE else k.keycode
+	if k.pressed and code == KEY_F11:
+		_toggle_fullscreen()
+		get_viewport().set_input_as_handled()
+		return
 	if k.pressed and code == KEY_F12:
 		_on_speed_pressed()
 		get_viewport().set_input_as_handled()
@@ -376,4 +467,4 @@ func _build_keymap() -> void:
 		KEY_KP_4: 0x4B, KEY_KP_5: 0x4C, KEY_RIGHT: 0x4D, KEY_KP_6: 0x4D, KEY_KP_ADD: 0x4E,
 		KEY_END: 0x4F, KEY_KP_1: 0x4F, KEY_DOWN: 0x50, KEY_KP_2: 0x50, KEY_PAGEDOWN: 0x51,
 		KEY_KP_3: 0x51, KEY_INSERT: 0x52, KEY_KP_0: 0x52, KEY_DELETE: 0x53,
-		KEY_KP_PERIOD: 0x53, KEY_F11: 0x57})
+		KEY_KP_PERIOD: 0x53})

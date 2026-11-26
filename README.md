@@ -14,12 +14,13 @@ which is gitignored. See `godot/README.md`.
 | Path | What |
 |------|------|
 | `PROMPT.md` | The porting prompt that produced this work, with errata found while executing it |
-| `godot/` | Godot 4.3+ project. `emu/` is the PC emulator in GDScript; `main.gd` handles display, keyboard, speaker and the game-folder picker |
+| `godot/` | Godot 4.3+ project. `emu/` is the PC emulator in GDScript; `main.gd` handles display, keyboard, speaker and the game-folder picker; `text_screen.gd` draws text screens with a vector font at native resolution (sharp at 1080p, 16:9) |
 | `tools/refemu/` | Python reference emulator (the oracle) with the same structure as the GDScript one. It runs the real game headless and takes screenshots |
 | `tools/disasm/` | Static analysis: MZ and PLINK86 overlay parser, relocation-aware disassembler, xref, team/window dumpers |
 | `tools/gdport/` | Test-only GDScript→Python translator, used to run the Godot emulator code in lockstep with the oracle |
+| `tools/preview_hd.py` | Renders real game screens at 1920x1080 the way `text_screen.gd` does, using Pillow, so the HD look can be checked without Godot |
 | `tools/check_port.py` | Confirms the GDScript port handles every opcode, interrupt service and port the oracle does |
-| `docs/` | `NFL_EXE_ANALYSIS.md`, `FILE_FORMATS.md`, `EMULATION_NOTES.md`, font license |
+| `docs/` | `NFL_EXE_ANALYSIS.md`, `FILE_FORMATS.md`, `EMULATION_NOTES.md`, font license. The bundled TTF fonts and their licenses are in `godot/fonts/` |
 
 Disassembly listings, screenshots and run directories are generated into
 `build/`, which is gitignored.
@@ -55,5 +56,7 @@ python3 -I tools/disasm/disasm.py  $G/NFL.EXE                # listings -> build
   `stats.log`. Every `.gd` file passes `gdparse` and `gdlint`.
 - **Not verified:** the project has **never been opened in a real Godot editor**.
   Downloading the Godot binary was blocked in the build sandbox. `main.gd`
-  (window, input, texture upload, audio, file dialog) is untested, and so is
-  GDScript speed. Expect small fixes on the first run.
+  (window, input, texture upload, audio, file dialog) and the HD text
+  renderer `text_screen.gd` are untested in Godot itself, and so is GDScript
+  speed. The HD layout was checked through its Pillow mirror,
+  `tools/preview_hd.py`. Expect small fixes on the first run.

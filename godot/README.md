@@ -84,6 +84,9 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 | `--program=<file>` | run another program, e.g. `--program=SEASON.COM` to build `season.nfl` (answer `D` for the team-disk drive) |
 | `--turbo` | start in turbo speed |
 | `--mute` | no PC-speaker sound |
+| `--fullscreen` | start in fullscreen |
+| `--retro` | start with the original 8x16 bitmap text instead of HD text |
+| `--modern-colors` | start with the modern palette |
 
 ## Keys
 
@@ -96,16 +99,46 @@ the numeric keypad (the game's two coaches use the left and right halves of
 the keyboard). The game's own keys are described in its manual and in
 `ADDENDUM.DOC`.
 
-Front-end keys and buttons:
+Front-end keys and buttons. The toolbar floats over the top of the screen and
+fades out; move the mouse to the top edge to show it (it stays visible while
+paused).
 
 | Key / button | Action |
 |--------------|--------|
 | **F12** / *Speed* | cycle 1x, 2x, 4x, 8x, turbo. At 1x-8x the 18.2 Hz PC timer follows real time (times the factor); in turbo the timer is derived from the instruction count and the CPU runs flat out |
+| **F11** / *Fullscreen* | toggle fullscreen (F11 is not passed to the game: it has no use for it) |
+| *Text: HD / retro* | HD vector-font text (default) or the original 8x16 bitmap text, 4:3 |
+| *Colors: classic / modern* | the 16 CGA colours, or a softer modern palette with the same hues (HD text only) |
 | *Pause* | pause / resume emulation |
 | *Reset* | reboot the program |
 | *Game folder...* | pick the folder with `NFL.EXE` |
-| *Screenshot* | save `user://screenshot_<time>.png` |
+| *Screenshot* | save what is on screen to `user://screenshot_<time>.png` |
 | *Sound* | toggle the PC speaker |
+
+## Display: HD text at 1080p
+
+The window opens maximized at 1920x1080 (stretch mode `disabled`, so nothing
+is scaled after rendering: everything is drawn at the window's real pixel size).
+
+* **Text screens** (menus, play calling, play-by-play, stats) are drawn by
+  `text_screen.gd` with a vector font, JetBrains Mono, with DejaVu Sans Mono as
+  the fallback for PC symbols. The font is rasterised at the actual cell size.
+  The 80x25 grid fills the whole 16:9 screen: 24 x 43 px cells at 1920x1080,
+  with the font sized to the cell width so letters keep natural monospace
+  spacing.
+* **Box-drawing, block and shade characters** are drawn as pixel-snapped
+  rectangles spanning the full cell, so single and double frame lines join
+  seamlessly at any size. Shades are blended colour fills rather than dither
+  patterns.
+* **CGA graphics** (instant replay, mode 4) stay pixel art: 320x200 scaled
+  with nearest-neighbour filtering, 4:3 and pillarboxed.
+* Any window size works. The cell width is capped at 0.75 x the cell height,
+  so ultrawide screens get side margins instead of stretched text.
+
+`tools/preview_hd.py` mirrors `text_screen.gd` (same layout and box rules,
+drawn with Pillow) and renders real game screens at 1920x1080 without Godot:
+`python3 -I tools/preview_hd.py --game-dir /path/to/nfl [--modern]` writes
+`build/shots/hd/`.
 
 ## How it works
 
