@@ -282,7 +282,13 @@ func _draw_art(o: Array) -> void:
 		if _textures.size() > MAX_TEXTURES:
 			_textures.clear()
 		_textures[key] = tex
-	draw_texture_rect(tex, rect, false)
+	var rot: float = o[7]
+	if rot != 0.0:
+		draw_set_transform(rect.get_center(), deg_to_rad(rot), Vector2.ONE)
+		draw_texture_rect(tex, Rect2(-rect.size * 0.5, rect.size), false)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	else:
+		draw_texture_rect(tex, rect, false)
 
 
 func _update_textgrid_rect() -> void:

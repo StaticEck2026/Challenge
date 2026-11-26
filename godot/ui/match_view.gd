@@ -26,6 +26,8 @@ const ZOOM := 1.8            # camera "Zoom" during plays
 ## fraction of a disc radius (the game's positions stay what they are).
 const DECLUTTER_CAP := 0.5
 const DECLUTTER_ITER := 6
+## Smallest disc radius on the canvas, px.
+const MIN_DISC_PX := 10.5
 
 var art: UiArt = null
 var kits: Array = []          # [home kit, away kit] (UiTheme.kit_colors)
@@ -34,6 +36,10 @@ var fy0: float = 0.0
 var fs: float = 1.0            # canvas px per art unit
 ## Largest display offset the declutter applied in the last frame, in yards.
 var last_declutter_yards: float = 0.0
+## Field orientation: false horizontal (default), true vertical.
+var vertical: bool = false
+## Side columns left by the vertical field: [left x0, left x1, right x0, right x1].
+var columns: Array = []
 var _zoomed: bool = false
 
 
@@ -42,50 +48,83 @@ func _init(p_art: UiArt = null) -> void:
 
 
 # ------------------------------------------------------------------ geometry
-## Fits the field art into the area under the toolbar and above the strip.
-## zoom > 1 enlarges it around the field point (zx, zy) (camera "Zoom").
-func layout_field(top: float, bottom: float, zoom: float = 1.0, zx: float = 50.0,
-		zy: float = 26.67) -> void:
-	var aw := UiTheme.W - 80.0
-	var ah := bottom - top
-	fs = minf(aw / ART_W, ah / ART_H)
-	fx0 = (UiTheme.W - ART_W * fs) * 0.5
-	fy0 = top + (ah - ART_H * fs) * 0.5
+## Fits the field into the area (left, top, width, height) of the canvas.
+## Horizontal: the left goal line on the left.  Vertical: the field turned 90
+## degrees counter-clockwise, the left goal line at the bottom (as the game's
+## own graphics field runs).  zoom > 1 enlarges it around the field point
+## (zx, zy), clamped so that the field covers the area (camera "Zoom").
+func layout_field(left: float, top: float, aw: float, ah: float, zoom: float = 1.0,
+		zx: float = 50.0, zy: float = 26.67) -> void:
+	var fw := ART_H if vertical else ART_W      # footprint in art units
+	var fh := ART_W if vertical else ART_H
+	fs = minf(aw / fw, ah / fh)
+	fx0 = left + (aw - fw * fs) * 0.5
+	fy0 = top + (ah - fh * fs) * 0.5
 	if zoom <= 1.0:
 		return
 	fs *= zoom
-	var px := (ART_X0 + (zx + 10.0) * UPY) * fs
-	var py := (ART_Y0 + zy * UPY) * fs
-	fx0 = clampf(UiTheme.W * 0.5 - px, UiTheme.W - ART_W * fs, 0.0)
-	fy0 = clampf(top + ah * 0.5 - py, bottom - ART_H * fs, top)
+	fx0 = 0.0
+	fy0 = 0.0
+	var c := pt(zx, zy)
+	fx0 = clampf(left + aw * 0.5 - c[0], left + aw - fw * fs, left)
+	fy0 = clampf(top + ah * 0.5 - c[1], top + ah - fh * fs, top)
 
 
-## Field yards (fx from the left goal line, fy from the top sideline) to canvas.
-func cx(fx: float) -> float:
-	return fx0 + (ART_X0 + (fx + 10.0) * UPY) * fs
+## The one orientation transform: field yards (fx from the left goal line of
+## the game's field, fy from its top sideline) to canvas [x, y].
+func pt(fx: float, fy: float) -> Array:
+	var u := ART_X0 + (fx + 10.0) * UPY
+	var v := ART_Y0 + fy * UPY
+	if vertical:
+		return [fx0 + v * fs, fy0 + (ART_W - u) * fs]
+	return [fx0 + u * fs, fy0 + v * fs]
 
 
-func cy(fy: float) -> float:
-	return fy0 + (ART_Y0 + fy * UPY) * fs
+## Canvas rectangle [x, y, w, h] of the whole field art.
+func field_rect() -> Array:
+	if vertical:
+		return [fx0, fy0, ART_H * fs, ART_W * fs]
+	return [fx0, fy0, ART_W * fs, ART_H * fs]
+
+
+## Rotation (degrees) of things drawn along the field's length.
+func base_rot() -> float:
+	return -90.0 if vertical else 0.0
 
 
 func yard_px() -> float:
 	return UPY * fs
 
 
-## The team's colour this match (end zones, scoreboard blocks, discs): the
-## visitor's changes when it clashes with the home team's (UiTheme.kit_colors).
+## Places art drawn for the horizontal field (w x h, centred on c) turned with
+## the field.
+func _art_at(dl: DrawList, art_name: String, c: Array, w: float, h: float,
+		params: Dictionary = {}) -> void:
+	dl.art(art_name, c[0] - w * 0.5, c[1] - h * 0.5, w, h, params, base_rot())
+
+
+## Text centred on canvas point c, turned by rot degrees.
+static func text_at(dl: DrawList, c: Array, s: String, size: float, color: String, rot: float,
+		bold: bool = true) -> void:
+	var off := DrawList.CAP * size * 0.5
+	var a := deg_to_rad(rot)
+	dl.text(c[0] - off * sin(a), c[1] + off * cos(a), s, size, color, "c", bold, rot)
+
+
+## The team's own colour (end zones, scoreboard blocks, strip block); it does
+## not change in a colour clash, only the discs do.
 func team_color(team: int) -> String:
 	var k: Dictionary = kits[0] if team == 1 else kits[1]
-	return k["fill"]
+	return k["primary"]
 
 
+## Text on the team's own colour (white or near-black by WCAG contrast).
 func team_text(team: int) -> String:
 	var k: Dictionary = kits[0] if team == 1 else kits[1]
-	return k["text"]
+	return k["primary_text"]
 
 
-## The team's disc style this match (the visitor may wear white).
+## The team's disc kit this match (the visitor's discs may change colour).
 func team_kit(team: int) -> Dictionary:
 	return kits[0] if team == 1 else kits[1]
 
@@ -103,25 +142,46 @@ func team_code(gs: GameState, team: int) -> String:
 ## overlay_top (bool: windows cover the field).
 func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	kits = UiTheme.kit_colors(gs.home_short, gs.away_short)
+	vertical = str(ui.get("field", "horizontal")) == "vertical"
 	dl.rect(0.0, 0.0, UiTheme.W, UiTheme.H, UiTheme.BG)
 	var zoom := 1.0
 	var cam: Array = ui.get("camera", [])
 	if ui.get("zoom", false) and gs.play_active and cam.size() == 2:
 		zoom = ZOOM
 	_zoomed = zoom > 1.0
-	if zoom > 1.0:
-		layout_field(BAR_H, UiTheme.H - STRIP_H, zoom, cam[0], cam[1])
+	var top := BAR_H + (12.0 if vertical else 78.0)
+	var bottom := UiTheme.H - (12.0 if vertical else STRIP_H + 14.0)
+	if vertical:
+		# the field fills the height, centred; the side columns stay free
+		layout_field(40.0, top, UiTheme.W - 80.0, bottom - top)
+		var fr := field_rect()
+		columns = [0.0, fr[0], fr[0] + fr[2], UiTheme.W]
+		if zoom > 1.0:
+			layout_field(fr[0], BAR_H, fr[2], UiTheme.H - BAR_H, zoom, cam[0], cam[1])
+	elif zoom > 1.0:
+		columns = []
+		layout_field(0.0, BAR_H, UiTheme.W, UiTheme.H - STRIP_H - BAR_H, zoom, cam[0], cam[1])
 	else:
-		layout_field(BAR_H + 78.0, UiTheme.H - STRIP_H - 14.0)
+		columns = []
+		layout_field(40.0, top, UiTheme.W - 80.0, bottom - top)
 	_field(dl, gs)
 	_lines(dl, gs)
 	if gs.play_active and gs.players.size() == 22:
 		_players(dl, gs, ui)
 	else:
 		_ball_marker(dl, gs, ui)
+	if vertical and zoom > 1.0:
+		# the zoomed vertical field stays in its column
+		var cl: float = columns[1]
+		var cr: float = columns[2]
+		dl.rect(0.0, BAR_H, cl, UiTheme.H - BAR_H, UiTheme.BG)
+		dl.rect(cr, BAR_H, UiTheme.W - cr, UiTheme.H - BAR_H, UiTheme.BG)
 	toolbar(dl, ui)
 	scoreboard(dl, gs)
-	_strip(dl, gs)
+	if vertical:
+		_side_info(dl, gs)
+	else:
+		_strip(dl, gs)
 
 
 func _left_team(gs: GameState) -> int:
@@ -134,49 +194,56 @@ func _field(dl: DrawList, gs: GameState) -> void:
 	var rt := 3 - lt
 	var lc := team_color(lt)
 	var rc := team_color(rt)
-	dl.art("field", fx0, fy0, ART_W * fs, ART_H * fs, {"left": lc, "right": rc})
-	# End-zone names, reading towards the field.
+	_art_at(dl, "field", pt(50.0, FIELD_W * 0.5), ART_W * fs, ART_H * fs, {"left": lc, "right": rc})
+	# End-zone names: across the end zone, reading towards the field
+	# (horizontal) or upright (vertical).
 	var ez := 10.0 * yard_px()
-	var mid := cy(FIELD_W * 0.5)
 	var size := minf(ez * 0.46, 64.0)
-	var ln := gs.full_name(lt).to_upper()
-	var rn := gs.full_name(rt).to_upper()
-	if gs.short_name(lt) != "":
-		ln = gs.short_name(lt).to_upper()
-	if gs.short_name(rt) != "":
-		rn = gs.short_name(rt).to_upper()
-	dl.text(cx(-5.0) + size * DrawList.CAP * 0.5, mid, ln, size, team_text(lt) + "e6", "c",
-		true, -90.0)
-	dl.text(cx(105.0) - size * DrawList.CAP * 0.5, mid, rn, size, team_text(rt) + "e6", "c",
-		true, 90.0)
-	# Yard numbers: bottom ones upright, top ones upside down (as painted).
+	var ln := gs.short_name(lt).to_upper() if gs.short_name(lt) != "" else gs.full_name(lt).to_upper()
+	var rn := gs.short_name(rt).to_upper() if gs.short_name(rt) != "" else gs.full_name(rt).to_upper()
+	var lrot := 0.0 if vertical else -90.0
+	var rrot := 0.0 if vertical else 90.0
+	text_at(dl, pt(-5.0, FIELD_W * 0.5), ln, size, team_text(lt) + "e6", lrot)
+	text_at(dl, pt(105.0, FIELD_W * 0.5), rn, size, team_text(rt) + "e6", rrot)
+	# Yard numbers, painted with their bottoms towards the nearer sideline:
+	# horizontal, upright near the bottom sideline and upside down near the
+	# top one; vertical, turned a quarter towards the left and right sidelines.
 	var ns := yard_px() * 2.0
+	var near := base_rot()            # rotation of the numbers by the fy = 53 sideline
+	var far := near + 180.0
 	for k in range(1, 10):
 		var yd := k * 10
 		var label := str(mini(yd, 100 - yd))
-		var x := cx(float(yd))
-		dl.text(x, cy(FIELD_W - 9.0), label, ns, "#f4f7f1dd", "c", true)
-		dl.text(x, cy(9.0), label, ns, "#f4f7f1dd", "c", true, 180.0)
+		text_at(dl, pt(float(yd), FIELD_W - 10.0), label, ns, "#f4f7f1dd", near)
+		text_at(dl, pt(float(yd), 10.0), label, ns, "#f4f7f1dd", far)
 		if yd != 50:
+			# arrows point to the nearer goal, beside the number (in yards)
 			var d := -1.0 if yd < 50 else 1.0
-			var ax := x + d * (dl.measure(label, ns, true) * 0.5 + yard_px() * 0.9)
-			_arrow(dl, ax, cy(FIELD_W - 9.0) - ns * 0.36, d, yard_px() * 0.42)
-			_arrow(dl, ax, cy(9.0) + ns * 0.36, d, yard_px() * 0.42)
+			var off := (dl.measure(label, ns, true) * 0.5) / yard_px() + 0.9
+			_arrow(dl, float(yd) + d * off, FIELD_W - 10.0, d)
+			_arrow(dl, float(yd) + d * off, 10.0, d)
 
 
-func _arrow(dl: DrawList, x: float, y: float, d: float, s: float) -> void:
-	dl.poly([x + d * s, y, x - d * s * 0.6, y - s * 0.8, x - d * s * 0.6, y + s * 0.8], "#f4f7f1cc")
+## A small triangle at field point (fx, fy) pointing along the field (d = +-1).
+func _arrow(dl: DrawList, fx: float, fy: float, d: float) -> void:
+	var s := 0.42
+	var pts := [[fx + d * s, fy], [fx - d * s * 0.6, fy - s * 0.8], [fx - d * s * 0.6, fy + s * 0.8]]
+	var flat := []
+	for q in pts:
+		var c := pt(q[0], q[1])
+		flat.append(c[0])
+		flat.append(c[1])
+	dl.poly(flat, "#f4f7f1cc")
 
 
 func _lines(dl: DrawList, gs: GameState) -> void:
-	var top := cy(0.0)
-	var h := cy(FIELD_W) - top
+	var h := FIELD_W * yard_px()
 	var w := yard_px() * 0.75
 	var p := {"H": h / w * 16.0}
 	if gs.first_down_fx > 0.0 and gs.first_down_fx < 100.0:
-		dl.art("line_first_down", cx(gs.first_down_fx) - w * 0.5, top, w, h, p)
+		_art_at(dl, "line_first_down", pt(gs.first_down_fx, FIELD_W * 0.5), w, h, p)
 	if gs.los_fx >= 0.0 and gs.los_fx <= 100.0:
-		dl.art("line_scrimmage", cx(gs.los_fx) - w * 0.5, top, w, h, p)
+		_art_at(dl, "line_scrimmage", pt(gs.los_fx, FIELD_W * 0.5), w, h, p)
 
 
 func _ball_marker(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
@@ -186,20 +253,24 @@ func _ball_marker(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	bx = ui.get("marker_fx", bx)
 	if bx < -10.0 or bx > 110.0 or not gs.field_up:
 		return
-	var by := FIELD_W * 0.5
-	_ball(dl, cx(bx), cy(by), 1.0)
+	var c := pt(bx, FIELD_W * 0.5)
+	_ball(dl, c[0], c[1], 1.0)
 
 
+## The ball at canvas (x, y), lying along the field.
 func _ball(dl: DrawList, x: float, y: float, k: float) -> void:
 	var bw := yard_px() * 1.5 * k
 	var bh := bw * 26.0 / 40.0
-	dl.art("ball", x - bw * 0.5, y - bh * 0.5, bw, bh)
+	dl.art("ball", x - bw * 0.5, y - bh * 0.5, bw, bh, {}, base_rot())
 
 
 func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	var pos: Array = ui.get("players", [])
 	var disc := DISC_R if _zoomed else DISC_R_FULL
-	var r := disc * yard_px()
+	# never smaller than MIN_DISC_PX on screen (the vertical full field is
+	# small), so the numbers stay legible; the declutter works at that size
+	var r := maxf(disc * yard_px(), MIN_DISC_PX)
+	disc = r / yard_px()
 	var carrier: int = gs.ball.get("carrier", -1)
 	# defence first, so the offence (and the ball carrier) sit on top
 	var order := []
@@ -223,8 +294,9 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		last_declutter_yards = maxf(last_declutter_yards, _dist(raw[i2], shown[i2]))
 	for i in order:
 		var p: Dictionary = gs.players[i]
-		var x := cx(shown[i][0])
-		var y := cy(shown[i][1])
+		var c := pt(shown[i][0], shown[i][1])
+		var x: float = c[0]
+		var y: float = c[1]
 		var team: int = p["team"]
 		var k := team_kit(team)
 		if i == carrier:
@@ -244,14 +316,17 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		# with the carrier, wherever the declutter put his disc
 		bfx = shown[carrier][0]
 		bfy = shown[carrier][1]
-		_ball(dl, cx(bfx) + r * 0.8, cy(bfy) + r * 0.75, 0.62)
+		var cc := pt(bfx, bfy)
+		_ball(dl, cc[0] + r * 0.8, cc[1] + r * 0.75, 0.62)
 	elif bfx > -20.0:
-		_ball(dl, cx(bfx), cy(bfy), 0.8)
+		var cb := pt(bfx, bfy)
+		_ball(dl, cb[0], cb[1], 0.8)
 
 
 # ------------------------------------------------------------------- chrome
 ## The slim dark toolbar: app mark, then View / Speed / Pause / Sound /
-## Screenshot / Fullscreen buttons (hotspots "ui:...").
+## Screenshot / field orientation / Zoom / More / Fullscreen buttons
+## (hotspots "ui:...").
 func toolbar(dl: DrawList, ui: Dictionary) -> void:
 	dl.rect(0.0, 0.0, UiTheme.W, BAR_H, UiTheme.BAR)
 	dl.rect(0.0, BAR_H - 1.0, UiTheme.W, 1.0, UiTheme.BAR_LINE)
@@ -265,6 +340,8 @@ func toolbar(dl: DrawList, ui: Dictionary) -> void:
 		["icon_fullscreen", "", "ui:fullscreen"],
 		["icon_menu", "", "ui:more"],
 		["icon_zoom", "Zoom" if ui.get("zoom", false) else "Full field", "ui:zoom"],
+		["icon_field", "Vertical" if str(ui.get("field", "")) == "vertical" else "Horizontal",
+			"ui:field"],
 		["icon_camera", "", "ui:screenshot"],
 		["icon_sound", "On" if ui.get("sound", true) else "Off", "ui:sound"],
 		["icon_play" if paused else "icon_pause", "Resume" if paused else "Pause", "ui:pause"],
@@ -307,7 +384,8 @@ func scoreboard(dl: DrawList, gs: GameState) -> void:
 	var sw := 96.0
 	var mw := 168.0
 	var w := (bw + sw) * 2.0 + mw
-	var x0 := (UiTheme.W - w) * 0.5
+	var mid_x := scoreboard_x()
+	var x0 := mid_x - w * 0.5
 	var y0 := BAR_H + 10.0
 	var r := h * 0.5
 	var away := team_color(2)
@@ -338,9 +416,17 @@ func scoreboard(dl: DrawList, gs: GameState) -> void:
 	if dd != "":
 		var tw := dl.measure(dd, 15.0, true) + 36.0
 		var ty := y0 + h - 4.0
-		dl.rrect((UiTheme.W - tw) * 0.5, ty, tw, 30.0, 10.0, "#121821", 1.0, "#ffffff1a")
-		dl.rect((UiTheme.W - tw) * 0.5 + 1.0, ty + 1.0, tw - 2.0, 10.0, "#121821")
-		dl.text_mid(UiTheme.W * 0.5, ty + 16.0, dd, 15.0, UiTheme.WARN, "c", true)
+		dl.rrect(mid_x - tw * 0.5, ty, tw, 30.0, 10.0, "#121821", 1.0, "#ffffff1a")
+		dl.rect(mid_x - tw * 0.5 + 1.0, ty + 1.0, tw - 2.0, 10.0, "#121821")
+		dl.text_mid(mid_x, ty + 16.0, dd, 15.0, UiTheme.WARN, "c", true)
+
+
+## Centre x of the scoreboard: the screen centre, or the left column when the
+## vertical field takes the middle.
+func scoreboard_x() -> float:
+	if vertical and columns.size() == 4:
+		return (float(columns[0]) + float(columns[1])) * 0.5
+	return UiTheme.W * 0.5
 
 
 func _timeouts(dl: DrawList, x: float, y: float, n: int, color: String) -> void:
@@ -394,36 +480,75 @@ func _strip(dl: DrawList, gs: GameState) -> void:
 	var y0 := UiTheme.H - STRIP_H
 	dl.rect(0.0, y0, UiTheme.W, STRIP_H, UiTheme.BAR)
 	dl.rect(0.0, y0, UiTheme.W, 1.0, UiTheme.BAR_LINE)
+	_possession(dl, gs, 28.0, y0 + 22.0)
+	_play_text(dl, gs, 470.0, y0 + 36.0, 900.0, 3)
+	if gs.play_active and gs.players.size() == 22:
+		_chips(dl, gs, 1408.0, y0 + 14.0)
+
+
+## Vertical field: the strip's contents as two cards at the foot of the side
+## columns (possession left, play text and line-up right).
+func _side_info(dl: DrawList, gs: GameState) -> void:
+	var l0: float = columns[0]
+	var l1: float = columns[1]
+	var r0: float = columns[2]
+	var r1: float = columns[3]
+	var h := 108.0
+	var y := UiTheme.H - h - 16.0
+	var lw := minf(l1 - l0 - 48.0, 460.0)
+	dl.art("panel", (l0 + l1 - lw) * 0.5, y, lw, h, _chrome(lw, h, 16.0, {}))
+	_possession(dl, gs, (l0 + l1 - lw) * 0.5 + 22.0, y + 22.0)
+	var rw := r1 - r0 - 48.0
+	var chips := gs.play_active and gs.players.size() == 22
+	if not chips and gs.pbp.size() == 0:
+		return
+	var rh := 196.0 if chips else h
+	var ry := UiTheme.H - rh - 16.0
+	dl.art("panel", r0 + 24.0, ry, rw, rh, _chrome(rw, rh, 16.0, {}))
+	_play_text(dl, gs, r0 + 48.0, ry + 36.0, rw - 48.0, 3)
+	if rh > h:
+		_chips(dl, gs, r0 + 48.0 + (rw - 48.0 - 11.0 * 44.0) * 0.5, ry + 104.0)
+
+
+## Team-with-the-ball block: code, time-outs, name, quarter.
+func _possession(dl: DrawList, gs: GameState, x: float, y: float) -> void:
 	var team := gs.poss
-	var x := 28.0
-	if team == 1 or team == 2:
-		var c := team_color(team)
-		dl.rrect(x, y0 + 22.0, 64.0, 64.0, 14.0, c)
-		dl.text_mid(x + 32.0, y0 + 54.0, team_code(gs, team), 20.0, team_text(team), "c", true)
-		_timeouts(dl, x + 32.0, y0 + 76.0, gs.timeouts_home if team == 1 else gs.timeouts_away,
-			team_text(team))
-		dl.text(x + 82.0, y0 + 46.0, dl.fit(gs.full_name(team), 20.0, 300.0, true), 20.0, UiTheme.TEXT,
-			"l", true)
-		dl.text(x + 82.0, y0 + 74.0, "Ball  ·  " + quarter_label(gs.quarter) + " quarter", 15.0,
-			UiTheme.TEXT_2)
-	# play / result text from the game
-	var tx := 470.0
-	var tw := 900.0
+	if team != 1 and team != 2:
+		return
+	var c := team_color(team)
+	dl.rrect(x, y, 64.0, 64.0, 14.0, c)
+	dl.text_mid(x + 32.0, y + 32.0, team_code(gs, team), 20.0, team_text(team), "c", true)
+	_timeouts(dl, x + 32.0, y + 54.0, gs.timeouts_home if team == 1 else gs.timeouts_away,
+		team_text(team))
+	dl.text(x + 82.0, y + 24.0, dl.fit(gs.full_name(team), 20.0, 300.0, true), 20.0, UiTheme.TEXT,
+		"l", true)
+	dl.text(x + 82.0, y + 52.0, "Ball  ·  " + quarter_label(gs.quarter) + " quarter", 15.0,
+		UiTheme.TEXT_2)
+
+
+## The game's play and result text, wrapped to width w, at most max_lines.
+func _play_text(dl: DrawList, gs: GameState, tx: float, ly: float, tw: float,
+		max_lines: int) -> void:
 	var lines := gs.pbp
 	if lines.size() == 0 and gs.play_active:
 		lines = PackedStringArray(["Play in progress"])
-	var ly := y0 + 36.0
 	var n := 0
 	for s in _wrap_join(dl, lines, 17.0, tw):
 		var first := n == 0 and lines.size() > 1
-		dl.text(tx, ly, s, 17.0 if not first else 18.0, UiTheme.TEXT if first else UiTheme.TEXT_2,
-			"l", first)
+		dl.text(tx, ly, dl.fit(s, 18.0 if first else 17.0, tw, first), 17.0 if not first else 18.0,
+			UiTheme.TEXT if first else UiTheme.TEXT_2, "l", first)
 		ly += 25.0
 		n += 1
-		if n >= 3:
+		if n >= max_lines:
 			break
-	if gs.play_active and gs.players.size() == 22:
-		_chips(dl, gs, 1408.0, y0 + 14.0)
+
+
+## Top of the status chips ("Offense selected") the screens draw over the
+## field's foot.
+func status_y() -> float:
+	if vertical:
+		return UiTheme.H - 108.0 - 16.0 - 46.0
+	return UiTheme.H - STRIP_H - 48.0
 
 
 ## Joins the game's 70-column lines into sentences and wraps them to width.

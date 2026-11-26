@@ -43,6 +43,21 @@ screenshot key. The program thread is unchanged.
 * **Canvas.** All layout is on a 1920x1080 logical canvas, scaled uniformly to
   the window (letterboxed if the aspect differs). Art is rasterised at the
   final pixel size, so it is sharp at 1080p, 4K or any window size.
+* **Field orientation.** Horizontal (default) or vertical, from the
+  toolbar's orientation button or `--field=horizontal|vertical`; the choice
+  is saved per viewer in `user://modern_view.cfg` (a missing or unreadable
+  file just leaves the default). Everything that draws the field goes through
+  one transform, `MatchView.pt(fx, fy)`: vertical turns the field 90 degrees
+  counter-clockwise, the left goal line of the game's field at the bottom
+  (the same way the game's own graphics field runs). Game-state positions and
+  the position check are untouched. In vertical the field fills the height of
+  the frame, centred; the scoreboard pill sits at the top of the left column,
+  play-calling windows fill the left and right columns without covering the
+  field, and the info strip becomes two cards at the foot of the columns
+  (possession left, play text and line-up right). Yard numbers turn a quarter
+  with their bottoms towards the nearer sideline, end-zone names are upright,
+  disc numbers always stay upright, and the zoom camera follows the ball in
+  both orientations (in vertical within the field's column).
 * **Field.** Horizontal, the whole 120 yards filling the 16:9 frame: mown
   stripes every 5 yards, yard lines, one-yard hash marks along the sidelines
   and on two inbound rows (placed where the game's own graphics field puts
@@ -55,18 +70,23 @@ screenshot key. The program thread is unchanged.
   the jersey number from the game's roster (position letters if a number is
   missing); the ball carrier gets a yellow ring and the ball sits at his
   side. Discs are 0.8 yd in radius on the full field and 0.9 yd with the zoom
-  camera. A display-only declutter (6 relaxation passes) pushes overlapping
-  discs apart, at most half a disc radius (0.40 / 0.45 yd), so numbers at
+  camera, never smaller than 10.5 px (the vertical full field is small). A display-only declutter (6 relaxation passes) pushes overlapping
+  discs apart, at most half a disc radius (0.40 / 0.45 yd horizontal, up to
+  0.66 yd on the vertical full field where the 10.5 px minimum applies), so
+  numbers at
   the line stay readable; drawing order is defence, offence, ball carrier.
   The game's positions are not changed (the position check uses them).
-* **Team colours** (`UiTheme.kit_colors`). The home team keeps its primary
-  colour. If the visitor's primary is closer than 18 (OKLab distance x100),
-  the visitor switches to its secondary colour; if that clashes too, to the
-  neutral kit (white, near-black, red, amber) farthest from the home colour.
-  The result is used everywhere: end zones, scoreboard blocks, discs, chips,
-  match-up cards and statistics pills. Text on a colour is white or
+* **Team colours** (`UiTheme.kit_colors`). End zones and their names,
+  scoreboard blocks, the strip's team block, match-up cards and statistics
+  pills always use each team's own primary colour. Only the player discs
+  (on the field and as line-up chips) take a clash-resolved kit: the home
+  team plays in its primary; if the visitor's primary is closer than 18
+  (OKLab distance x100), the visitor's discs switch to its secondary colour,
+  and if that clashes too, to the neutral kit (white, near-black, red,
+  amber) farthest from the home colour. Text on any fill is white or
   near-black by WCAG contrast; on a white kit it is the team colour when that
-  has at least 4.5:1 contrast. Discs move smoothly: the game updates
+  has at least 4.5:1 contrast. Colts at Bills: both end zones blue, Colts
+  discs white with blue numbers. Discs move smoothly: the game updates
   positions a few times a second, the view interpolates between two updates
   over the measured update interval, at the display's frame rate. Jumps over
   9 yards (a new play) are not animated.
@@ -81,7 +101,7 @@ screenshot key. The program thread is unchanged.
   to the play's result before showing the play; reading them directly would
   give the result away).
 * **Toolbar** (slim, dark, top): View, Speed, Pause/Resume, Sound, Screenshot,
-  Zoom (a camera option for plays that follows the ball at 1.8x; the default
+  field orientation (Horizontal/Vertical), Zoom (a camera option for plays that follows the ball at 1.8x; the default
   is the full field), More (shows the HD/Classic toolbar with Reset, Game
   folder and Colors), Fullscreen.
 * **Info strip** (dark, bottom): the team with the ball and its time-outs,
@@ -185,6 +205,7 @@ translation of the recompiled program unchanged.
 G=/path/to/nfl
 python3 -I tools/modern/capture.py --game-dir $G            # real states -> build/modern/states/
 python3 -I tools/modern/render.py                           # SVG + PNG -> build/shots/modern/
+python3 -I tools/modern/render.py --field vertical [state ...]   # vertical field, *_v.png
 python3 -I tools/modern/check_positions.py --game-dir $G --ticks 12000 --fast
 python3 -I tools/recomp/lockstep.py --game-dir $G --with-ui season
 python3 -I tools/recomp/lockstep.py --game-dir $G --with-ui boot
@@ -227,7 +248,8 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   memory checkpoint. Both `season` (728,068 service calls, `STATS.LOG`
   byte-identical, the layer ran on 11,587 ticks) and `boot` (541,803 service
   calls, 4,137 CGA frames identical, the layer ran on 8,524 ticks including
-  4,060 play frames) pass with the layer active.
+  4,060 play frames, alternating the horizontal and vertical field) pass with
+  the layer active.
 
 ## Limitations
 

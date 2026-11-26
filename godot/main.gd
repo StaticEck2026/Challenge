@@ -37,6 +37,8 @@ const TURBO_FACTOR := 32.0
 const MIX_RATE := 22050.0
 const RECOMP_DIR := "res://recomp"
 const VIEW_NAMES := ["Modern", "HD", "Classic"]
+## Per-viewer Modern-view settings (field orientation).
+const SETTINGS_PATH := "user://modern_view.cfg"
 ## A file every game folder has (data, not the program).
 const MARKER_FILE := "LEAGUE.NFL"
 
@@ -83,6 +85,8 @@ var ips: float = 0.0
 var sound_on: bool = true
 var view: int = View.MODERN
 var zoom_on: bool = false
+## Modern view field orientation: "horizontal" (default) or "vertical".
+var field_orientation: String = "horizontal"
 var start_fullscreen: bool = false
 
 
@@ -99,6 +103,7 @@ func _ready() -> void:
 
 # ------------------------------------------------------------------ setup
 func _parse_args() -> void:
+	_load_settings()
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--dos-root="):
 			dos_root = a.substr(11)
@@ -112,6 +117,8 @@ func _parse_args() -> void:
 			sound_on = false
 		elif a == "--retro":
 			view = View.CLASSIC
+		elif a.begins_with("--field="):
+			field_orientation = "vertical" if a.substr(8).to_lower() == "vertical" else "horizontal"
 		elif a.begins_with("--view="):
 			var v := a.substr(7).to_lower()
 			if v == "hd":
@@ -423,6 +430,26 @@ func _update_toolbar(delta: float) -> void:
 	toolbar.visible = toolbar.modulate.a > 0.01
 
 
+## Reads the viewer's saved Modern-view settings; a missing or broken file
+## just leaves the defaults.
+func _load_settings() -> void:
+	var cfg := ConfigFile.new()
+	var err := cfg.load(SETTINGS_PATH)
+	if err != OK:
+		return
+	var f = cfg.get_value("modern", "field", "horizontal")
+	if typeof(f) == TYPE_STRING and (f == "horizontal" or f == "vertical"):
+		field_orientation = f
+
+
+func _save_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("modern", "field", field_orientation)
+	var err := cfg.save(SETTINGS_PATH)
+	if err != OK and machine != null:
+		machine.log_msg("[settings] cannot save %s (error %d)" % [SETTINGS_PATH, err])
+
+
 ## Modern view buttons: the key the screen asks for, as a key press.
 func _on_modern_key(key_name: String) -> void:
 	if machine == null:
@@ -459,6 +486,9 @@ func _on_modern_ui(action: String) -> void:
 			toolbar_pinned = not toolbar_pinned
 		"zoom":
 			zoom_on = not zoom_on
+		"field":
+			field_orientation = "horizontal" if field_orientation == "vertical" else "vertical"
+			_save_settings()
 
 
 func _on_screenshot_pressed() -> void:
@@ -509,7 +539,8 @@ func _update_video(delta: float) -> void:
 	if view == View.MODERN:
 		modern.ui = {"view_label": VIEW_NAMES[view],
 			"speed_label": speed_button.text.trim_prefix("Speed: "),
-			"paused": paused, "sound": sound_on, "subtitle": "", "zoom": zoom_on}
+			"paused": paused, "sound": sound_on, "subtitle": "", "zoom": zoom_on,
+			"field": field_orientation}
 		modern.refresh(machine, delta)
 		aspect.visible = false
 		# unrecognised screens: the HD text renderer inside the modern frame

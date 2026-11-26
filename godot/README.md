@@ -131,6 +131,7 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 | `--fullscreen` | start in fullscreen |
 | `--view=modern\|hd\|classic` | start in the Modern view (default), HD text, or the original bitmap |
 | `--retro` | same as `--view=classic` |
+| `--field=horizontal\|vertical` | Modern view field orientation (default horizontal; the toolbar choice is remembered in `user://modern_view.cfg`) |
 | `--modern-colors` | start with the modern palette |
 
 ## Keys
@@ -166,15 +167,19 @@ The default view redraws every screen with hand-authored flat SVG art
 (`ui/art/`), rasterised with `Image.load_svg_from_string()` at the window's
 size (sharp at any resolution):
 
-* the field top-down and horizontal, whole, filling 16:9: striped grass,
-  yard lines and numbers, hash marks, goal posts, end zones in team colours;
+* the field top-down, whole: horizontal filling 16:9 (default), or vertical
+  filling the height with the scoreboard, play lists and play text in the
+  side columns (toolbar *Horizontal/Vertical*, `--field=`, remembered per
+  viewer); striped grass, yard lines and numbers, hash marks, goal posts, end
+  zones in the teams' own colours;
 * players as team-coloured discs with their jersey numbers (from the game's
-  rosters), moving smoothly between the game's position updates; the ball,
+  rosters; if the colours clash only the visitor's discs change colour), moving smoothly between the game's position updates; the ball,
   the line of scrimmage (blue) and the first-down line (yellow), for plays,
   instant replay and the field overview before the snap;
 * a scoreboard pill (team codes, score, quarter, clock, time-outs,
   possession, down and distance), a slim toolbar (View, Speed, Pause, Sound,
-  Screenshot, Zoom, More, Fullscreen) and an info strip with the play text;
+  Screenshot, field orientation, Zoom, More, Fullscreen) and an info strip
+  with the play text;
 * setup, team selection, match-up, play calling, statistics and prompts as
   cards and buttons. A button sends the key the screen asks for. Screens it
   does not recognise show the original text (HD renderer) in a modern frame.

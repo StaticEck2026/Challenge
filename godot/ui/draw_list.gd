@@ -72,10 +72,11 @@ func text_mid(x: float, cy: float, s: String, size: float, color: String, align:
 	text(x, cy + CAP * size * 0.5, s, size, color, align, bold)
 
 
-## An SVG art file placed at (x, y, w, h) with placeholder values.
+## An SVG art file placed at (x, y, w, h) with placeholder values; rot (degrees,
+## clockwise) turns it about the centre of that rectangle.
 func art(art_name: String, x: float, y: float, w: float, h: float,
-		params: Dictionary = {}) -> void:
-	ops.append(["art", art_name, x, y, w, h, params])
+		params: Dictionary = {}, rot: float = 0.0) -> void:
+	ops.append(["art", art_name, x, y, w, h, params, rot])
 
 
 ## The original 80x25 text screen drawn in a rectangle (unrecognised screens).
@@ -158,7 +159,11 @@ func to_svg(art_lib: UiArt, palette: Array = []) -> String:
 		elif kind == "text":
 			out.append(_svg_text(o))
 		elif kind == "art":
-			out.append(art_lib.nested(o[1], o[6], o[2], o[3], o[4], o[5]))
+			var nest := art_lib.nested(o[1], o[6], o[2], o[3], o[4], o[5])
+			if o[7] != 0.0:
+				nest = "<g transform=\"rotate(%s %s %s)\">%s</g>" % [n(o[7]), n(o[2] + o[4] * 0.5),
+					n(o[3] + o[5] * 0.5), nest]
+			out.append(nest)
 		elif kind == "textgrid":
 			out.append(_svg_textgrid(o, palette))
 	out.append("</svg>")

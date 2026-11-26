@@ -350,7 +350,9 @@ def ui_layer(log):
 
     def hook(mem):
         gs.update(mem)
-        sid = screens.build(dl, gs, {"view_label": "Modern", "speed_label": "1x"})
+        # both field orientations, alternating
+        field = "vertical" if stats["frames"] % 2 else "horizontal"
+        sid = screens.build(dl, gs, {"view_label": "Modern", "speed_label": "1x", "field": field})
         stats["frames"] += 1
         stats["screens"][sid] = stats["screens"].get(sid, 0) + 1
     return hook, stats

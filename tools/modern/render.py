@@ -108,24 +108,30 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("states", nargs="*")
     ap.add_argument("--no-png", action="store_true")
+    ap.add_argument("--field", choices=["horizontal", "vertical"], default="horizontal",
+                    help="field orientation of the Modern view (vertical frames get a _v suffix)")
     a = ap.parse_args()
     ui = uimod.load()
     art, screens, dl = make(ui)
     names = a.states or sorted(os.path.basename(p)[:-4] for p in glob.glob(os.path.join(capture.OUT, "*.bin")))
     paths = []
+    base = {"field": a.field}
+    sfx = "_v" if a.field == "vertical" else ""
     for n in names:
-        path, sid, gs = render_state(ui, n, art, screens, dl)
+        path, sid, gs = render_state(ui, n, art, screens, dl, dict(base), n + sfx)
         extra = ""
         if sid == "play":
             extra = " declutter max %.2f yd" % screens.match_view.last_declutter_yards
-        print("[svg] %-22s screen=%-9s ops=%4d hotspots=%2d%s" % (n, sid, len(dl.ops), len(dl.hotspots), extra))
+        print("[svg] %-22s screen=%-9s ops=%4d hotspots=%2d%s" % (n + sfx, sid, len(dl.ops), len(dl.hotspots),
+                                                                    extra))
         paths.append(path)
         if sid == "play" and n.endswith("_mid"):
             # the same frame with the toolbar's camera "Zoom" on, centred on the ball
             cam = [gs.ball["fx"], gs.ball["fy"]]
-            path, sid, gs = render_state(ui, n, art, screens, dl, {"zoom": True, "camera": cam}, n + "_zoom")
+            path, sid, gs = render_state(ui, n, art, screens, dl, dict(base, zoom=True, camera=cam),
+                                         n + "_zoom" + sfx)
             print("[svg] %-22s screen=%-9s (zoom) declutter max %.2f yd"
-                  % (n + "_zoom", sid, screens.match_view.last_declutter_yards))
+                  % (n + "_zoom" + sfx, sid, screens.match_view.last_declutter_yards))
             paths.append(path)
     if not a.no_png:
         rasterize(paths)

@@ -373,10 +373,11 @@ func _matchup(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		var x := 200.0 if i == 0 else UiTheme.W - 200.0 - cw
 		var nm: String = names[i]
 		var k: Dictionary = mkits[1] if teams[i] == 2 else mkits[0]
-		card(dl, x, y, cw, 300.0, k["fill"], 112.0)
-		dl.text(x + 32.0, y + 42.0, "VISITOR" if i == 0 else "HOME", 15.0, str(k["text"]) + "b3",
+		card(dl, x, y, cw, 300.0, k["primary"], 112.0)
+		dl.text(x + 32.0, y + 42.0, "VISITOR" if i == 0 else "HOME", 15.0, str(k["primary_text"]) + "b3",
 			"l", true)
-		dl.text(x + 32.0, y + 86.0, dl.fit(nm, 34.0, cw - 64.0, true), 34.0, k["text"], "l", true)
+		dl.text(x + 32.0, y + 86.0, dl.fit(nm, 34.0, cw - 64.0, true), 34.0, k["primary_text"], "l",
+			true)
 		_kv(dl, x + 32.0, y + 148.0, "icon_coach", "Coach", coach[i])
 		_kv(dl, x + 32.0, y + 214.0, "icon_keyboard", "Keypad", keypad[i])
 	dl.text(UiTheme.W * 0.5, y + 165.0, "at", 30.0, UiTheme.TEXT_3, "c", true)
@@ -458,6 +459,9 @@ func _field_windows(dl: DrawList, gs: GameState) -> void:
 		boxes.append(b)
 	last_windows = boxes
 	var ys := [MatchView.BAR_H + 96.0, MatchView.BAR_H + 96.0]
+	if match_view.vertical:
+		# left column: under the scoreboard; right column: from the top
+		ys = [MatchView.BAR_H + 128.0, MatchView.BAR_H + 16.0]
 	var side_boxes := []
 	for b0 in boxes:
 		if int(b0["top"]) >= 18:
@@ -477,7 +481,7 @@ func _field_windows(dl: DrawList, gs: GameState) -> void:
 			if s != "" and numbered([s]).size() == 0:
 				other.append(s)
 		var w := 380.0
-		var x := 28.0 if side == 0 else UiTheme.W - 28.0 - w
+		var x := _win_x(side, w)
 		var head := 44.0 if str(b2["title"]) != "" else 14.0
 		var h := head + opts.size() * 38.0 + other.size() * 30.0 + 14.0
 		var y: float = ys[side]
@@ -515,10 +519,15 @@ func _field_windows(dl: DrawList, gs: GameState) -> void:
 	for i in range(mini(st.size(), 2)):
 		var label: String = st[i]
 		var tw := dl.measure(label, 15.0, true) + 40.0
-		var x2: float = sx[0] if i == 0 and last.find(label) < 40 else UiTheme.W - 28.0 - tw
-		dl.rrect(x2, UiTheme.H - MatchView.STRIP_H - 48.0, tw, 32.0, 16.0, "#14532dee", 1.0, "#22c55e66")
-		dl.circle(x2 + 16.0, UiTheme.H - MatchView.STRIP_H - 32.0, 4.0, UiTheme.GOOD)
-		dl.text_mid(x2 + 26.0, UiTheme.H - MatchView.STRIP_H - 32.0, label, 15.0, "#bbf7d0", "l", true)
+		var left := i == 0 and last.find(label) < 40
+		var x2: float = sx[0] if left else UiTheme.W - 28.0 - tw
+		if match_view.vertical and match_view.columns.size() == 4:
+			var k := 0 if left else 2
+			x2 = (float(match_view.columns[k]) + float(match_view.columns[k + 1]) - tw) * 0.5
+		var sy := match_view.status_y()
+		dl.rrect(x2, sy, tw, 32.0, 16.0, "#14532dee", 1.0, "#22c55e66")
+		dl.circle(x2 + 16.0, sy + 16.0, 4.0, UiTheme.GOOD)
+		dl.text_mid(x2 + 26.0, sy + 16.0, label, 15.0, "#bbf7d0", "l", true)
 
 
 ## Unrecognised screen: the original text (HD text renderer) in a modern frame.
@@ -557,10 +566,10 @@ func _notice(dl: DrawList, gs: GameState, b: Dictionary) -> void:
 		var t := str(l).strip_edges()
 		if t != "":
 			lines.append(t)
-	var w := 640.0
+	var w := minf(640.0, _notice_w())
 	var h := 40.0 + lines.size() * 34.0 + 24.0
-	var x := (UiTheme.W - w) * 0.5
-	var y := UiTheme.H - MatchView.STRIP_H - h - 40.0
+	var x := _notice_cx() - w * 0.5
+	var y := match_view.status_y() - h + 8.0
 	dl.art("panel", x, y, w, h, {"W": w, "H": h, "R": 16.0, "W1": w - 1.5, "H1": h - 1.5})
 	var tx := x + 28.0
 	if badge != "":
@@ -582,14 +591,16 @@ func _yes_no(dl: DrawList, gs: GameState) -> void:
 		if p < 0:
 			continue
 		var q := row.strip_edges().replace(" (y/n)", "").replace("(y/n)", "").strip_edges()
-		var w := 720.0
+		var w := minf(720.0, _notice_w())
 		var h := 150.0
-		var x := (UiTheme.W - w) * 0.5
-		var y := UiTheme.H - MatchView.STRIP_H - h - 40.0
+		var mx := _notice_cx()
+		var x := mx - w * 0.5
+		var y := match_view.status_y() - h + 8.0
+		var bw := minf(220.0, (w - 60.0) * 0.5)
 		dl.art("panel", x, y, w, h, {"W": w, "H": h, "R": 16.0, "W1": w - 1.5, "H1": h - 1.5})
-		dl.text(UiTheme.W * 0.5, y + 50.0, q, 24.0, UiTheme.TEXT, "c", true)
-		key_button(dl, UiTheme.W * 0.5 - 230.0, y + 76.0, 220.0, 52.0, "Y", "Yes", true)
-		key_button(dl, UiTheme.W * 0.5 + 10.0, y + 76.0, 220.0, 52.0, "N", "No", false)
+		dl.text(mx, y + 50.0, dl.fit(q, 24.0, w - 40.0, true), 24.0, UiTheme.TEXT, "c", true)
+		key_button(dl, mx - bw - 10.0, y + 76.0, bw, 52.0, "Y", "Yes", true)
+		key_button(dl, mx + 10.0, y + 76.0, bw, 52.0, "N", "No", false)
 		return
 
 
@@ -649,8 +660,10 @@ func _stats(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	var kits := UiTheme.kit_colors(home, away)
 	var k1: Dictionary = kits[1] if t1 == away else kits[0]
 	var k2: Dictionary = kits[0] if t2 == home else kits[1]
-	var c1: String = k1["fill"]
-	var c2: String = k2["fill"]
+	var c1: String = k1["primary"]
+	var c2: String = k2["primary"]
+	if UiTheme.oklab_distance(c1, c2) < UiTheme.CLASH_DISTANCE:
+		c2 += "80"      # same-looking colours: the second bar is lighter
 	var x := 160.0
 	var w := UiTheme.W - 320.0
 	var y := TOP + 28.0
@@ -690,8 +703,8 @@ func _stats(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 
 
 func _team_chip(dl: DrawList, x: float, y: float, w: float, nm: String, k: Dictionary) -> void:
-	dl.rrect(x, y, w - 20.0, 44.0, 12.0, k["fill"], 2.0, k["rim"])
-	dl.text_mid(x + (w - 20.0) * 0.5, y + 22.0, nm, 19.0, k["text"], "c", true)
+	dl.rrect(x, y, w - 20.0, 44.0, 12.0, k["primary"], 2.0, UiTheme.shade(k["primary"], 0.62))
+	dl.text_mid(x + (w - 20.0) * 0.5, y + 22.0, nm, 19.0, k["primary_text"], "c", true)
 
 
 ## Thin two-colour bar comparing the first numbers of two values.
@@ -738,7 +751,7 @@ func _table_window(dl: DrawList, b: Dictionary, side: int, y: float) -> float:
 		if t.strip_edges() != "" and not t.strip_edges().begins_with("──") and not t.contains("─────"):
 			lines.append(t)
 	var w := 460.0
-	var x := 28.0 if side == 0 else UiTheme.W - 28.0 - w
+	var x := _win_x(side, w)
 	var head := 44.0
 	var h := head + lines.size() * 30.0 + 14.0
 	dl.art("panel", x, y, w, h, {"W": w, "H": h, "R": 14.0, "W1": w - 1.5, "H1": h - 1.5})
@@ -755,3 +768,30 @@ func _table_window(dl: DrawList, b: Dictionary, side: int, y: float) -> float:
 		dl.text(x + 20.0, ly + 21.0, t2.replace("►", " "), fs, col, "l", sel, 0.0, true)
 		ly += 30.0
 	return y + h
+
+
+## Left edge of a side window: at the screen edge over the horizontal field,
+## centred in the free column beside the vertical one.
+func _win_x(side: int, w: float) -> float:
+	var mv := match_view
+	if mv.vertical and mv.columns.size() == 4:
+		var c0: float = mv.columns[2 * side]
+		var c1: float = mv.columns[2 * side + 1]
+		return maxf(c0 + 16.0, c0 + (c1 - c0 - w) * 0.5)
+	return 28.0 if side == 0 else UiTheme.W - 28.0 - w
+
+
+## Notices and questions: centred over the horizontal field; in the right
+## column beside the vertical one.
+func _notice_cx() -> float:
+	var mv := match_view
+	if mv.vertical and mv.columns.size() == 4:
+		return (float(mv.columns[2]) + float(mv.columns[3])) * 0.5
+	return UiTheme.W * 0.5
+
+
+func _notice_w() -> float:
+	var mv := match_view
+	if mv.vertical and mv.columns.size() == 4:
+		return float(mv.columns[3]) - float(mv.columns[2]) - 48.0
+	return 720.0

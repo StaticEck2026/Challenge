@@ -72,14 +72,17 @@ static func team_colors(short_name: String, team: int) -> Array:
 	return HOME_DEFAULT if team == 1 else AWAY_DEFAULT
 
 
-## Team styles ("kits") for a match: [home, away], each {"fill", "rim",
-## "text", "primary"}; "fill" is used everywhere the team is shown (end zone,
-## scoreboard block, discs, chips, statistics pills).  The home team keeps its
-## primary colour.  If the visitor's primary is perceptually too close to it
-## (OKLab distance under CLASH_DISTANCE), the visitor switches to its
-## secondary colour; if that clashes as well, to the neutral kit farthest from
-## the home colour.  Text on a kit is white or near-black, whichever has the
-## higher contrast (WCAG), or the team colour itself on a white kit.
+## Team styles for a match: [home, away], each {"fill", "rim", "text",
+## "primary", "primary_text"}.  "primary" is the team's own colour, used for
+## everything that names the team (end zones, scoreboard blocks, the strip's
+## team block, statistics pills); "primary_text" is the text on it.  "fill",
+## "rim" and "text" are the player discs' kit (discs and the lineup chips):
+## the home team plays in its primary colour; if the visitor's primary is
+## perceptually too close to it (OKLab distance under CLASH_DISTANCE), the
+## visitor's discs switch to its secondary colour, and if that clashes as
+## well, to the neutral kit farthest from the home colour.  Text on any fill
+## is white or near-black, whichever has the higher contrast (WCAG), or the
+## team colour itself on a white kit.
 static func kit_colors(home_key: String, away_key: String) -> Array:
 	var h: Array = team_colors(home_key, 1)
 	var a: Array = team_colors(away_key, 2)
@@ -103,8 +106,8 @@ static func match_colors(home: String, away: String) -> Array:
 	return kit_colors(home, away)
 
 
-## A kit on `fill`; `team` is the team's own primary colour, used for the rim
-## and the number when the fill is light enough for it to read.
+## A disc kit on `fill`; `team` is the team's own primary colour, used for
+## the rim and the number when the fill is light enough for it to read.
 static func make_kit(fill: String, team: String) -> Dictionary:
 	var txt := on_color(fill)
 	var rim := shade(fill, 0.62)
@@ -112,11 +115,12 @@ static func make_kit(fill: String, team: String) -> Dictionary:
 		rim = team
 		if contrast(team, fill) >= 4.5:
 			txt = team
-	return kit(fill, rim, txt, fill)
+	return kit(fill, rim, txt, team)
 
 
 static func kit(fill: String, rim: String, txt: String, primary: String) -> Dictionary:
-	return {"fill": fill, "rim": rim, "text": txt, "primary": primary}
+	return {"fill": fill, "rim": rim, "text": txt, "primary": primary,
+		"primary_text": on_color(primary)}
 
 
 static func rgb(hex: String) -> Array:
