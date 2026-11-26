@@ -21,7 +21,11 @@ const BAR_H := 52.0
 const STRIP_H := 108.0
 const DISC_R := 0.9          # yards, zoomed camera
 const DISC_R_FULL := 0.8     # yards, full field (players are dense at the line)
-const ZOOM := 1.8            # camera "Zoom" during plays
+const ZOOM := 1.8            # camera "Zoom" during plays (at most)
+## Yards beyond each sideline the zoom camera keeps in view.
+const ZOOM_MARGIN := 1.5
+## Height the scoreboard pill and its tab take under the toolbar.
+const PILL_SPACE := 96.0
 ## Display-only declutter: overlapping discs are pushed apart by at most this
 ## fraction of a disc radius (the game's positions stay what they are).
 const DECLUTTER_CAP := 0.5
@@ -40,6 +44,12 @@ var last_declutter_yards: float = 0.0
 var vertical: bool = false
 ## Side columns left by the vertical field: [left x0, left x1, right x0, right x1].
 var columns: Array = []
+## Canvas area where the field is visible (not under the chrome): x0, y0, x1, y1.
+var viewport: Array = []
+## Discs drawn in the last frame: [x, y, r] on the canvas (tests).
+var last_discs: Array = []
+## Chrome drawn over the field in the last frame: [x0, y0, x1, y1] each (tests).
+var occluders: Array = []
 var _zoomed: bool = false
 
 
@@ -51,23 +61,36 @@ func _init(p_art: UiArt = null) -> void:
 ## Fits the field into the area (left, top, width, height) of the canvas.
 ## Horizontal: the left goal line on the left.  Vertical: the field turned 90
 ## degrees counter-clockwise, the left goal line at the bottom (as the game's
-## own graphics field runs).  zoom > 1 enlarges it around the field point
-## (zx, zy), clamped so that the field covers the area (camera "Zoom").
-func layout_field(left: float, top: float, aw: float, ah: float, zoom: float = 1.0,
-		zx: float = 50.0, zy: float = 26.67) -> void:
+## own graphics field runs).
+func layout_field(left: float, top: float, aw: float, ah: float) -> void:
 	var fw := ART_H if vertical else ART_W      # footprint in art units
 	var fh := ART_W if vertical else ART_H
 	fs = minf(aw / fw, ah / fh)
 	fx0 = left + (aw - fw * fs) * 0.5
 	fy0 = top + (ah - fh * fs) * 0.5
-	if zoom <= 1.0:
-		return
-	fs *= zoom
-	fx0 = 0.0
-	fy0 = 0.0
-	var c := pt(zx, zy)
-	fx0 = clampf(left + aw * 0.5 - c[0], left + aw - fw * fs, left)
-	fy0 = clampf(top + ah * 0.5 - c[1], top + ah - fh * fs, top)
+
+
+## Zoom camera: as large as ZOOM times the horizontal full-field scale while
+## the field's whole width (sideline to sideline, plus 1.5 yd) still fits the
+## space between the toolbar and the strip (horizontal) or the screen width
+## (vertical); centred across the field, following fx along its length.
+func layout_zoom(cam_fx: float) -> void:
+	var top := BAR_H
+	var ah := UiTheme.H - STRIP_H - BAR_H
+	var base := minf((UiTheme.W - 80.0) / ART_W, (ah - 92.0) / ART_H)
+	var span := FIELD_W * UPY + 2.0 * ZOOM_MARGIN * UPY
+	var across := (UiTheme.W - 80.0) if vertical else ah
+	fs = minf(base * ZOOM, across / span)
+	var v_mid := ART_Y0 + FIELD_W * 0.5 * UPY
+	var u_cam := ART_X0 + (clampf(cam_fx, -10.0, 110.0) + 10.0) * UPY
+	if vertical:
+		# the ball sits in the middle of the space under the scoreboard pill
+		var mid_y := top + PILL_SPACE + (ah - PILL_SPACE) * 0.5
+		fx0 = UiTheme.W * 0.5 - v_mid * fs
+		fy0 = clampf(mid_y - (ART_W - u_cam) * fs, top + ah - ART_W * fs, top)
+	else:
+		fy0 = top + ah * 0.5 - v_mid * fs
+		fx0 = clampf(UiTheme.W * 0.5 - u_cam * fs, UiTheme.W - ART_W * fs, 0.0)
 
 
 ## The one orientation transform: field yards (fx from the left goal line of
@@ -151,34 +174,33 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	_zoomed = zoom > 1.0
 	var top := BAR_H + (12.0 if vertical else 78.0)
 	var bottom := UiTheme.H - (12.0 if vertical else STRIP_H + 14.0)
-	if vertical:
+	columns = []
+	if zoom > 1.0:
+		# zoom: the whole width of the field stays visible, the camera
+		# follows the ball along the field's length; the chrome is the
+		# horizontal view's (pill at the top centre, strip at the bottom)
+		layout_zoom(cam[0])
+		viewport = [0.0, BAR_H, UiTheme.W, UiTheme.H - STRIP_H]
+	elif vertical:
 		# the field fills the height, centred; the side columns stay free
 		layout_field(40.0, top, UiTheme.W - 80.0, bottom - top)
 		var fr := field_rect()
 		columns = [0.0, fr[0], fr[0] + fr[2], UiTheme.W]
-		if zoom > 1.0:
-			layout_field(fr[0], BAR_H, fr[2], UiTheme.H - BAR_H, zoom, cam[0], cam[1])
-	elif zoom > 1.0:
-		columns = []
-		layout_field(0.0, BAR_H, UiTheme.W, UiTheme.H - STRIP_H - BAR_H, zoom, cam[0], cam[1])
+		viewport = [0.0, BAR_H, UiTheme.W, UiTheme.H]
 	else:
-		columns = []
 		layout_field(40.0, top, UiTheme.W - 80.0, bottom - top)
+		viewport = [0.0, BAR_H, UiTheme.W, UiTheme.H - STRIP_H]
 	_field(dl, gs)
 	_lines(dl, gs)
+	last_discs = []
+	occluders = []
 	if gs.play_active and gs.players.size() == 22:
 		_players(dl, gs, ui)
 	else:
 		_ball_marker(dl, gs, ui)
-	if vertical and zoom > 1.0:
-		# the zoomed vertical field stays in its column
-		var cl: float = columns[1]
-		var cr: float = columns[2]
-		dl.rect(0.0, BAR_H, cl, UiTheme.H - BAR_H, UiTheme.BG)
-		dl.rect(cr, BAR_H, UiTheme.W - cr, UiTheme.H - BAR_H, UiTheme.BG)
 	toolbar(dl, ui)
 	scoreboard(dl, gs)
-	if vertical:
+	if vertical and columns.size() == 4:
 		_side_info(dl, gs)
 	else:
 		_strip(dl, gs)
@@ -297,6 +319,7 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		var c := pt(shown[i][0], shown[i][1])
 		var x: float = c[0]
 		var y: float = c[1]
+		last_discs.append([x, y, r])
 		var team: int = p["team"]
 		var k := team_kit(team)
 		if i == carrier:
@@ -390,6 +413,7 @@ func scoreboard(dl: DrawList, gs: GameState) -> void:
 	var r := h * 0.5
 	var away := team_color(2)
 	var home := team_color(1)
+	occluders.append([x0, y0, x0 + w, y0 + h + 26.0])
 	dl.art("scoreboard", x0, y0, w, h, {"W": w, "H": h, "R": r, "BW": bw, "BW2": bw + r,
 		"XR": w - bw - r, "MW": w - 2.0 * bw, "W1": w - 2.0, "H1": h - 2.0, "left": away,
 		"right": home, "SL": bw + sw, "SR": w - bw - sw, "SY": 12.0, "SH": h - 24.0})
@@ -424,7 +448,7 @@ func scoreboard(dl: DrawList, gs: GameState) -> void:
 ## Centre x of the scoreboard: the screen centre, or the left column when the
 ## vertical field takes the middle.
 func scoreboard_x() -> float:
-	if vertical and columns.size() == 4:
+	if columns.size() == 4:
 		return (float(columns[0]) + float(columns[1])) * 0.5
 	return UiTheme.W * 0.5
 

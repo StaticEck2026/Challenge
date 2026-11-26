@@ -16,6 +16,13 @@ read from:
    5 yards (within 0.2 yd) on every yard line the game drew (horizontal
    lines in the CGA frame, up to 3 pixels thick; wider bands are the filled
    area behind an end line), so the yard scale and the scroll are right;
+4. visibility: the Modern view's layout (MatchView.build, horizontal and
+   vertical field, full field and zoom camera on the ball) must draw every
+   disc inside the visible field area (not off the canvas or under the
+   toolbar or strip); off-screen discs are counted per orientation and zoom,
+   split into "across the width" and "along the length" (zoom only follows
+   the length, so only the latter is expected there), and discs whose
+   centre is under the scoreboard pill are counted too;
 3. ball spot: at the first frame of each play the ball must be within one
    yard of the line of scrimmage the text-mode scoreboard showed before the
    play ("Yard: 33", on the side of the field the overview's marker is on),
@@ -113,11 +120,13 @@ def main():
         runs.append(("instant replay, Alt-E", "/i",
                      scripts.CONFIG_KEYS + scripts.TEAM_KEYS + "{when:Timeouts}{wait:20}{Alt-E}"))
     total = {"frames": 0, "players": 0, "matched": 0, "offscreen": 0, "max_err": 0.0,
-             "decl_max": 0.0, "iso": 0, "iso_matched": 0, "iso_exact": 0, "spots": [], "line_detail": [],
+             "decl_max": 0.0, "vis": {}, "vis_frames": 0, "iso": 0, "iso_matched": 0, "iso_exact": 0, "spots": [], "line_detail": [],
              "line_frames": 0, "line_bad": 0, "plays": 0, "spot_bad": 0, "missed": []}
     for title, args, keys in runs:
         r = harness.Run(a.game_dir, "check", args, keys, max_ticks=a.ticks, log=lambda m: None)
         gs = ui.GameState()
+        mv = ui.MatchView(ui.UiArt())
+        vdl = ui.DrawList()
         st = {"was_gfx": False, "marker_fx": None}
 
         def tick(r):
@@ -151,6 +160,28 @@ def main():
             shown = ui.MatchView.declutter(raw, ui.MatchView.DISC_R)
             total["decl_max"] = max(total["decl_max"], max(
                 ((a_[0] - b_[0]) ** 2 + (a_[1] - b_[1]) ** 2) ** 0.5 for a_, b_ in zip(raw, shown)))
+            # 4. visibility of every disc in the four layouts
+            total["vis_frames"] += 1
+            for field in ("horizontal", "vertical"):
+                for zoom in (False, True):
+                    mv.build(vdl, gs, {"field": field, "zoom": zoom,
+                                       "camera": [gs.ball["fx"], gs.ball["fy"]]})
+                    x0, y0, x1, y1 = mv.viewport
+                    key = (field, "zoom" if zoom else "full")
+                    c = total["vis"].setdefault(key, [0, 0, 0])
+                    for (x, y, rr) in mv.last_discs:
+                        for (ox0, oy0, ox1, oy1) in mv.occluders:
+                            # the disc centre under the scoreboard pill
+                            if ox0 <= x <= ox1 and oy0 <= y <= oy1:
+                                c[2] += 1
+                        out_x = x - rr < x0 - 0.5 or x + rr > x1 + 0.5
+                        out_y = y - rr < y0 - 0.5 or y + rr > y1 + 0.5
+                        across = out_x if field == "vertical" else out_y
+                        along = out_y if field == "vertical" else out_x
+                        if across:
+                            c[0] += 1
+                        elif along:
+                            c[1] += 1
             # 1. players
             exp = []
             for p in gs.players:
@@ -229,6 +260,13 @@ def main():
     print("[check] display-only declutter of the Modern view (zoom disc size): largest disc offset "
           "%.2f yd (cap %.2f yd); the checks use the unadjusted positions"
           % (t["decl_max"], ui.MatchView.DECLUTTER_CAP * ui.MatchView.DISC_R))
+    for key in sorted(t["vis"]):
+        c = t["vis"][key]
+        print("[check] visibility %-10s %-4s: %d play frames x 22 discs, %d off-screen across the "
+              "width, %d off-screen along the length, %d under the scoreboard pill"
+              % (key[0], key[1], t["vis_frames"], c[0], c[1], c[2]))
+    vis_ok = all(c[0] == 0 for c in t["vis"].values()) and all(
+        c[1] == 0 for k, c in t["vis"].items() if k[1] == "full")
     print("[check] yard lines: %d frames with lines, %d frames where a drawn line was not on a "
           "5-yard multiple of the view's scale" % (t["line_frames"], t["line_bad"]))
     print("[check] ball at the snap vs the line of scrimmage on the text scoreboard: %d plays, "
@@ -238,7 +276,7 @@ def main():
         print("[check] yard-line mismatches (tick, rows, cam_y, los, los_y, fx, step): %s" % t["line_detail"])
     if t["missed"]:
         print("[check] unmatched isolated (tick, record, x, y, best score): %s" % t["missed"])
-    ok = t["frames"] > 0 and ipct >= 99.0 and t["line_bad"] == 0 and t["spot_bad"] == 0
+    ok = t["frames"] > 0 and ipct >= 99.0 and t["line_bad"] == 0 and t["spot_bad"] == 0 and vis_ok
     print("[check] %s" % ("PASS" if ok else "FAIL"))
     return 0 if ok else 1
 

@@ -56,8 +56,16 @@ screenshot key. The program thread is unchanged.
   field, and the info strip becomes two cards at the foot of the columns
   (possession left, play text and line-up right). Yard numbers turn a quarter
   with their bottoms towards the nearer sideline, end-zone names are upright,
-  disc numbers always stay upright, and the zoom camera follows the ball in
-  both orientations (in vertical within the field's column).
+  disc numbers always stay upright.
+* **Zoom camera** (both orientations, plays only). It enlarges the field up to
+  1.8x the horizontal full-field scale while the whole width of the field
+  (sideline to sideline plus 1.5 yd) stays visible, and follows the ball only
+  along the field's length. Vertical zoom uses most of the screen width
+  (about 31 px per yard, roughly 29 yards of length in view) with the
+  horizontal view's chrome: the pill at the top centre, the strip at the
+  bottom, the ball kept in the middle of the space under the pill. In the
+  horizontal orientation the width constraint leaves little room: the zoom
+  is about 1.1x.
 * **Field.** Horizontal, the whole 120 yards filling the 16:9 frame: mown
   stripes every 5 yards, yard lines, one-yard hash marks along the sidelines
   and on two inbound rows (placed where the game's own graphics field puts
@@ -241,7 +249,13 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
   scrimmage. Counting overlapping sprites too, 79.5 % of 111,255 positions
   match a recognisable sprite within 2 px (the rest are shapes destroyed by
   XOR overlap). The display-only declutter moved a disc by at most 0.45 yd
-  (its cap). PASS.
+  (its cap). Visibility of the 22 discs in the view's own layout, over the
+  same frames: 0 off-screen across the field's width in all four layouts
+  (horizontal or vertical, full field or zoom), 0 off-screen at all on the
+  full field; with the vertical zoom 10,886 of 124,388 disc positions (8.7 %)
+  are beyond the camera along the field's length (deep players on long
+  plays; the camera follows the ball), and disc centres under the scoreboard
+  pill number 1,024 (horizontal zoom) and 1,190 (vertical zoom). PASS.
 * **Passivity.** `lockstep.py --with-ui` runs `GameState.update()` and
   `Screens.build()` on every BIOS tick of the recompiled side (as main.gd does
   every frame) while comparing it with the oracle at every service call and
