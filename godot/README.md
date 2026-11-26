@@ -14,8 +14,13 @@ with flat SVG vector art from the program's memory, presentation only),
 game data, in this project. **Bring your own copy of the game.**
 `docs/RECOMPILATION.md` explains the design.
 
-> **Status: this Godot project was NOT executed in the development sandbox**
-> (no Godot binary could be downloaded or run there). What was verified:
+> **Status: now run with the official Godot 4.3 binary** (Linux, headless and
+> under Xvfb with Mesa llvmpipe OpenGL 3; no real GPU, sound card, mouse or
+> keyboard): `tools/godot_check.sh` imports the project, compiles all 49
+> scripts and passes the boot, seasoncom and season smoke tests, and the
+> interactive Modern view was driven through whole scenarios with `--keys=`
+> (screenshots in `build/godot/shots/`, see `docs/MODERN_UI.md`, "Verification
+> in Godot 4.3"). Verified before Godot could run here:
 >
 > * every `.gd` file, the generated ones included, parses with `gdparse` and
 >   passes `gdlint` (`gdlintrc` here; the recompiler writes a relaxed
@@ -34,9 +39,10 @@ game data, in this project. **Bring your own copy of the game.**
 >   on a Python thread, driven by a 60 Hz "main thread" exactly as `main.gd`
 >   drives it (keys through the mutex-guarded queue, wake-ups, abort and join).
 >
-> Godot itself never compiled the about 490,000 generated lines and never
-> ran the `Thread`, `main.gd` (window, input, rendering, audio, file dialog) or
-> `text_screen.gd`. Expect small fixes on the first real run.
+> Not exercised in real Godot yet: a hardware GPU, audio output (the
+> sandbox falls back to Godot's dummy audio driver), the file dialog, and a
+> person with a real mouse and keyboard (clicks and keys were injected
+> through Godot's input pipeline instead).
 
 ## Install the game files
 
@@ -138,6 +144,10 @@ Pass them after `--`, e.g. `godot --path godot -- --args=/s`:
 | `--retro` | same as `--view=classic` |
 | `--field=horizontal\|vertical` | Modern view field orientation (default horizontal; the toolbar choice is remembered in `user://modern_view.cfg`) |
 | `--modern-colors` | start with the modern palette |
+| `--keys=<script>` / `--keys-file=<file>` | drive the game with a key script (`host/key_script.gd` syntax: `{when:TEXT}`, `{wait:N}`, `{Enter}`, `{Alt-E}`, ...; `{when:[graphics mode 4]}` waits for a play) plus `{shot:NAME}` (save the window to `--shot-dir`) and `{click:ACTION}` (click the Modern view's button with that action, e.g. `ui:zoom`, `key:PgDn`, `pad:R:3`; `hostkey:KP_2` sends a numeric-keypad key) |
+| `--shot-dir=<dir>` | where `{shot:}` saves (default `user://shots`) |
+| `--quit-when-done` | quit when the key script is done; prints frame times and the Modern view's own time per frame |
+| `--view-trace=<file>` | one line per frame during plays (camera, first discs) for smoothness checks |
 
 ## Keys
 
@@ -148,8 +158,9 @@ including **Shift**, **Ctrl** and **Alt** combinations (for example **Alt+E**
 half time), **F1-F10**, arrows, **PgUp/PgDn**, **Home/End**, **Ins/Del** and
 the numeric keypad (the game's two coaches use the left and right halves of
 the keyboard: the left coach answers his menus with F1-F10, the right coach
-with the keypad digits; the front end keeps the program's NumLock in step
-with yours, so the keypad works either way). The game's own keys are
+with the keypad digits; with your NumLock on, a numeric-keypad key reaches
+the program as its digit, sent with Shift held, which is how the host BIOS
+gives keypad digits). The game's own keys are
 described in its manual and in `ADDENDUM.DOC`.
 
 Front-end keys and buttons. The toolbar floats over the top of the screen and
@@ -313,7 +324,8 @@ from the bundled `recomp/game/` (`recompile.py ... --bundle-data`).
 
 ## Known gaps
 
-* Not run in Godot (see the status box above); `main.gd` is untested.
+* Run in Godot 4.3 only in a headless/Xvfb software-rendering sandbox (see the
+  status box above): no real GPU, audio device or human input yet.
 * `recomp/` must be regenerated (one command, above) for every fresh checkout:
   it is not committed. The translator targets this exact `NFL.EXE` (v2.01,
   8/8/89).

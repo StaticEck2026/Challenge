@@ -22,6 +22,14 @@ const FONT_UI := "res://fonts/Inter-Medium.otf"
 const FONT_UI_BOLD := "res://fonts/Inter-Bold.otf"
 const FONT_MONO := "res://fonts/JetBrainsMono-Medium.ttf"
 const MAX_TEXTURES := 600
+## Rasterised art kept in the cache, in pixels (about 256 MB of RGBA8).
+const MAX_TEXTURE_PIXELS := 64 * 1024 * 1024
+## Art drawn larger than this (pixels, either side) is rasterised at a scale
+## rounded to steps of 2^(1/8), so a moving zoom camera reuses textures
+## instead of rasterising the whole field again every frame.
+const QUANTIZE_ABOVE := 320.0
+## Largest texture side; bigger art is rasterised at this size and stretched.
+const MAX_TEXTURE_SIDE := 4096.0
 ## A jump longer than this (yards) between two updates is not animated.
 const SNAP_YARDS := 9.0
 
@@ -35,16 +43,26 @@ var screen_id: String = ""
 ## Window-space rectangle where the original text screen should be shown
 ## (unrecognised screens), or an empty Rect2.
 var textgrid_rect: Rect2 = Rect2()
+## Time spent per frame (microseconds, summed; main.gd --keys prints them):
+## reading memory and laying out (refresh), issuing draw calls (_draw), and
+## rasterising SVG art into textures (inside _draw).
+var perf_refresh_usec: int = 0
+var perf_draw_usec: int = 0
+var perf_raster_usec: int = 0
+var perf_frames: int = 0
+var perf_rasters: int = 0
 
 var _font: Font = null
 var _font_bold: Font = null
 var _font_mono: Font = null
 var _textures: Dictionary = {}
+var _texture_pixels: int = 0
 var _styles: Dictionary = {}
 var _colors: Dictionary = {}
 var _scale: float = 1.0
 var _origin: Vector2 = Vector2.ZERO
 var _hover: Array = []
+var _mouse_lp: Vector2 = Vector2(-1.0, -1.0)    # last mouse position (logical)
 
 # interpolation
 var _last_step: int = -1
@@ -87,12 +105,14 @@ static func _load_font(path: String) -> Font:
 
 func _on_resized() -> void:
 	_textures.clear()
+	_texture_pixels = 0
 	queue_redraw()
 
 
 ## Per frame from main.gd (main thread): read memory, advance the
 ## interpolation, lay the frame out.
 func refresh(m: Machine, delta: float) -> void:
+	var t0 := Time.get_ticks_usec()
 	state.update(m.cpu.mem)
 	_animate(delta)
 	var u := ui.duplicate()
@@ -102,14 +122,20 @@ func refresh(m: Machine, delta: float) -> void:
 			u["ball"] = _blend_one(_ball_prev, _ball_cur)
 		if u.get("zoom", false):
 			u["camera"] = _follow_camera(u, delta)
+		u["dt"] = delta
 	else:
 		_camera = []
 	if _marker_cur > -50.0:
 		var t := clampf(_marker_since / 0.25, 0.0, 1.0)
 		u["marker_fx"] = lerpf(_marker_prev, _marker_cur, t)
 	screen_id = screens.build(dl, state, u)
+	# the hover highlight follows the buttons of this frame (a window that
+	# closed under a still mouse must not leave its highlight behind)
+	_hover = _hotspot_at(_mouse_lp) if _mouse_lp.x >= 0.0 else []
 	_update_textgrid_rect()
 	queue_redraw()
+	perf_refresh_usec += Time.get_ticks_usec() - t0
+	perf_frames += 1
 
 
 func _animate(delta: float) -> void:
@@ -147,11 +173,16 @@ func _animate(delta: float) -> void:
 		_last_step = -1
 		_cur = []
 	if not state.graphics and state.field_up:
-		if absf(state.ball_fx - _marker_cur) > 0.01:
-			_marker_prev = state.ball_fx if _marker_cur < -50.0 else _marker_cur
-			if absf(state.ball_fx - _marker_prev) > 30.0:
-				_marker_prev = state.ball_fx
-			_marker_cur = state.ball_fx
+		# the ball where MatchView puts it: on the line of scrimmage when the
+		# marker (2-yard columns) is next to it, else at the marker
+		var target := state.ball_fx
+		if state.los_fx >= 0.0 and absf(state.ball_fx - state.los_fx) <= 2.0:
+			target = state.los_fx
+		if absf(target - _marker_cur) > 0.01:
+			_marker_prev = target if _marker_cur < -50.0 else _marker_cur
+			if absf(target - _marker_prev) > 30.0:
+				_marker_prev = target
+			_marker_cur = target
 			_marker_since = 0.0
 
 
@@ -213,6 +244,12 @@ func _col(s: String) -> Color:
 
 
 func _draw() -> void:
+	var t0 := Time.get_ticks_usec()
+	_draw_ops()
+	perf_draw_usec += Time.get_ticks_usec() - t0
+
+
+func _draw_ops() -> void:
 	_layout()
 	draw_rect(Rect2(Vector2.ZERO, size), _col(UiTheme.BG))
 	for op in dl.ops:
@@ -225,8 +262,7 @@ func _draw() -> void:
 				_style(o[6], o[5], o[7], o[8]).draw(get_canvas_item(),
 					Rect2(_p(o[1], o[2]), Vector2(o[3], o[4]) * _scale))
 			"circle":
-				draw_circle(_p(o[1], o[2]), o[3] * _scale, _col(o[4]))
-				draw_arc(_p(o[1], o[2]), o[3] * _scale, 0.0, TAU, 48, _col(o[4]), 1.0, true)
+				draw_circle(_p(o[1], o[2]), o[3] * _scale, _col(o[4]), true, -1.0, true)
 			"ring":
 				draw_arc(_p(o[1], o[2]), o[3] * _scale, 0.0, TAU, 64, _col(o[5]), o[4] * _scale, true)
 			"line":
@@ -289,19 +325,35 @@ func _draw_art(o: Array) -> void:
 	if rect.size.x < 1.0 or rect.size.y < 1.0:
 		return
 	var params: Dictionary = o[6]
-	var key := "%s|%s|%d|%d" % [o[1], str(params), int(rect.size.x), int(rect.size.y)]
+	var size_key := "%dx%d" % [int(rect.size.x), int(rect.size.y)]
+	var big := maxf(rect.size.x, rect.size.y) > QUANTIZE_ABOVE
+	if big:
+		# one texture per scale step; drawn stretched to the exact rectangle
+		size_key = "q%d" % int(round(log(rect.size.x) / log(2.0) * 8.0))
+	var key := "%s|%s|%s" % [o[1], str(params), size_key]
 	var tex: Texture2D = _textures.get(key)
 	if tex == null:
+		var t0 := Time.get_ticks_usec()
 		var svg := art.render(o[1], params)
 		var vb := UiArt.view_box(svg)
 		var img := Image.new()
-		var k: float = rect.size.x / maxf(float(vb[2]), 1.0)
+		var vw := maxf(float(vb[2]), 1.0)
+		var vh := maxf(float(vb[3]), 1.0)
+		var k: float = rect.size.x / vw
+		if big:
+			k = pow(2.0, round(log(rect.size.x) / log(2.0) * 8.0) / 8.0) / vw
+		k = minf(k, MAX_TEXTURE_SIDE / maxf(vw, vh))
 		if img.load_svg_from_string(svg, k) != OK:
 			return
 		tex = ImageTexture.create_from_image(img)
-		if _textures.size() > MAX_TEXTURES:
+		var px := img.get_width() * img.get_height()
+		if _textures.size() >= MAX_TEXTURES or _texture_pixels + px > MAX_TEXTURE_PIXELS:
 			_textures.clear()
+			_texture_pixels = 0
 		_textures[key] = tex
+		_texture_pixels += px
+		perf_raster_usec += Time.get_ticks_usec() - t0
+		perf_rasters += 1
 	var rot: float = o[7]
 	if rot != 0.0:
 		draw_set_transform(rect.get_center(), deg_to_rad(rot), Vector2.ONE)
@@ -324,6 +376,7 @@ func _update_textgrid_rect() -> void:
 func _gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		var lp := _logical((event as InputEventMouseMotion).position)
+		_mouse_lp = lp
 		var h := _hotspot_at(lp)
 		if h != _hover:
 			_hover = h
@@ -343,6 +396,17 @@ func _gui_input(event: InputEvent) -> void:
 			elif action.begins_with("ui:"):
 				ui_action.emit(action.substr(3))
 				accept_event()
+
+
+## The zoom camera of the last frame ([centre fx, centre fy, scale] or []).
+func camera_now() -> Array:
+	return _camera
+
+
+## Logical canvas point -> position in this control (for scripted clicks).
+func logical_to_window(p: Vector2) -> Vector2:
+	_layout()
+	return _origin + p * _scale
 
 
 func _logical(p: Vector2) -> Vector2:

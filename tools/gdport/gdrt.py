@@ -149,6 +149,8 @@ def _str_method(s, name, a):
         return ord(s[a[0]])
     if name == "to_ascii_buffer":
         return bytearray(s.encode("latin-1", "replace"))
+    if name == "to_utf8_buffer":
+        return bytearray(s.encode("utf-8"))
     if name == "strip_edges":
         left = a[0] if len(a) > 0 else True
         right = a[1] if len(a) > 1 else True

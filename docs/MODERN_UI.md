@@ -241,7 +241,8 @@ on the **left keypad** answers with the function keys (entry 1 = F1 ...
 entry 10 = F10, scan codes `3B`-`44`), a coach on the **right keypad** with
 the numeric keypad producing digits (entry 1-9 = keypad 1-9, entry 10 =
 keypad 0; scan codes `4F 50 51 4B 4C 4D 47 48 49 52` with the ASCII digit,
-which the BIOS gives with NumLock on, or with Shift when it is off). The
+which the host BIOS, `host/bios.gd`, gives with Shift held: it does not apply
+NumLock to the keypad). The
 plain digit keys are ignored in these menus. Which coach is human and on
 which side is in memory (`83CB`/`83CD` home, `83FC`/`83FE` visitor; see the
 address map).
@@ -250,11 +251,11 @@ A numbered entry in a play-calling window becomes a hotspot
 `pad:<L|R>:<digit>`: the side is that of the team named in the window title
 (or, for an untitled window, the screen side it is on), and the badge shows
 the key (`F3` or `3`). `main.gd` (`_press_coach_key`) turns it into F1-F10,
-or into the keypad scan code, plain when the program's NumLock (BIOS flag
-`0417h` bit 5) is on and wrapped in Shift when it is off. When the player
-uses the real numeric keypad, `main.gd` (`_sync_numlock`) first toggles the
-program's NumLock to match the host's, so keypad keys arrive as digits
-either way.
+or into the keypad scan code wrapped in Shift make/break. A real
+numeric-keypad key that the host's NumLock makes a digit is sent the same way
+(`_unhandled_input`). (An earlier version sent the plain keypad code when the
+program's NumLock flag was on; real Godot showed that the host BIOS then
+gives no digit, and the kick menu ignored the click.)
 
 Verified in the `humanplay` capture: the bot plays the Bills (human, right
 keypad) only through those injected keys, through the kick-off, defence,
@@ -275,9 +276,78 @@ in which the game does not compute play positions at all. Then the view
 shows the field overview with the moving ball marker and the play text,
 which is all the game has.
 
+## Verification in Godot 4.3
+
+With the official Godot 4.3 Linux binary (`build/godot/`, fetched and
+checked by `tools/godot_check.sh`), under `xvfb-run` with Mesa llvmpipe
+(OpenGL 3, software rendering), at 1920x1080:
+
+```sh
+xvfb-run -a godot --path godot --rendering-driver opengl3 -- --dos-root=$G --args=/i \
+    --view=modern --field=horizontal --keys-file=script.k --shot-dir=$PWD/build/godot/shots \
+    --quit-when-done [--view-trace=trace.txt]
+```
+
+`--keys=`/`--keys-file=` drive the interactive program with the key-script
+language of `host/key_script.gd` (blocking after each `{shot:}`/`{click:}`
+until the main thread has done it); `{shot:NAME}` saves
+`get_viewport().get_texture().get_image()` three frames after the request;
+`{click:ACTION}` finds the Modern view's button with that action and clicks
+its centre through `Input.parse_input_event` (motion, press, release), so the
+real GUI input path, hotspots and key injection are exercised;
+`{click:hostkey:KP_2}` sends a numeric-keypad key event. Three scripts cover
+setup to the first play and its replay (horizontal and vertical, full field
+and zoom, toggled with the toolbar buttons), the half-time statistics and
+the PgDn pages (paged with the PgDn button, the game run at turbo with the
+Speed button), and a human coach on the right keypad (kick menu, defence
+group and play chosen with a button click, a real keypad key, and a button
+click; the game's play text then named the defence chosen, entry 3 "20
+Three Deep").
+Screenshots: `build/godot/shots/*.png`, the same states as the previews.
+
+Found and fixed in real Godot:
+
+* the right-keypad coach's buttons did nothing (keypad digits need Shift
+  with this BIOS, see "Coach keys"); fixed for buttons and the real keypad;
+* the ball on the field overview sat a yard off the line of scrimmage (the
+  view animated it towards the 2-yard marker column instead of the spot
+  `MatchView` uses); it now eases to the same place as the previews;
+* the time-out dots were drawn larger than designed (an extra 1-px
+  antialiased arc around each circle); now one antialiased `draw_circle`;
+* a hover highlight stayed on screen after its window closed under a still
+  mouse; the highlight is now re-evaluated every frame;
+* after a turnover, the play's players were mirrored around the line of
+  scrimmage and labelled with the wrong team: the game sets the possession
+  variable (`57EC`) to the play's result before showing the play;
+  `GameState` now takes the team with the ball from the text scoreboard
+  shown before the play (`play_poss`, latched for the play and its replay);
+* the zoom camera rasterised the whole field SVG again on every frame while
+  it eased (a new texture per pixel size, up to 600 cached full-field
+  textures): large art is now rasterised at scales rounded to steps of
+  2^(1/8), capped at 4096 px, with a 64-Mpixel cache budget (71-118 SVG
+  rasterisations per run in total);
+* discs whose declutter offsets crossed flipped sides between frames (jumps
+  of 20-37 px at zoom); in the live view the offsets now ease at 10/s
+  (`MatchView.DECLUTTER_RATE`, previews and checks unchanged).
+
+Measured (llvmpipe, 1080p, 4 CPU cores shared with the program thread):
+28-31 frames per second (mean 33-35 ms per frame; 22 fps while other test
+jobs shared the CPU), worst 150 ms;
+the Modern view itself takes 1.6-1.9 ms per frame to read memory and lay out
+and 0.8-1.1 ms to issue its draw calls, so the frame time is the software
+renderer's. A `--view-trace` of a zoomed play shows the camera easing
+without reversals except at the replay cut and at the first frames of the
+play (players placed one by one). Text, rotated text (end zones, yard
+numbers), StyleBox corners, alpha (the compact pill) and SVG art match the
+previews. Godot logs no script errors; the only warnings are the sandbox's
+(no V-Sync, no ALSA device) and, at exit, "ObjectDB instances leaked" / "30
+resources still in use": the program's host objects (Machine, BIOS, DOS,
+RecompHost and the generated units reference each other), none from
+`ui/`.
+
 ## Verification without Godot
 
-Godot could not be run here. Everything below runs the **shipped GDScript**:
+Before Godot could run here, and still as the deterministic tests: everything below runs the **shipped GDScript**:
 `tools/gdport/gd2py.py --ui` translates `godot/ui/*.gd` (except
 `modern_view.gd`, which only draws) to Python; `--ui` makes `/` Python's true
 division and adds the String/Array methods the UI code uses, and leaves the
@@ -375,13 +445,15 @@ python3 -I tools/modern/research.py --game-dir $G scoreboard|records|scroll
 
 ## Limitations
 
-* Not run in Godot: `modern_view.gd` (texture rasterisation, drawing, input)
-  and the `main.gd` integration are checked only by `gdparse`/`gdlint`. SVG
-  features were kept to what ThorVG (Godot's rasteriser) supports: rect,
-  circle, ellipse, path, line, groups, opacity, stroke-dasharray; no text, no
-  gradients, no ids.
-* The previews are rendered by Chromium from the same draw list; Godot's font
-  rendering and antialiasing will differ slightly.
+* Run in Godot 4.3 only under Xvfb with software OpenGL (llvmpipe): no real
+  GPU, no audio device (Godot's dummy driver), no person at a real mouse and
+  keyboard (clicks and keys went through `Input.parse_input_event`), and
+  frame times are those of software rendering. SVG features were kept to
+  what ThorVG (Godot's rasteriser) supports: rect, circle, ellipse, path,
+  line, groups, opacity, stroke-dasharray; no text, no gradients, no ids.
+* The Python previews are rendered by Chromium from the same draw list;
+  Godot's text and antialiasing differ by a pixel here and there (thin SVG
+  lines such as the line of scrimmage look slightly heavier in Godot).
 * In extra-extra-fast mode (Alt+E) or with the game's graphics turned off,
   the game computes no player positions; the Modern view then shows the
   moving ball marker and the play text, not players (see "Players during

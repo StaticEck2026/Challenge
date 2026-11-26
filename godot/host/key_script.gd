@@ -8,6 +8,12 @@
 ##   {when:TEXT}           wait until TEXT is on the text screen (checked every 4 ticks)
 ##   {gone:TEXT}           wait until TEXT is gone
 ##   {shot:NAME}           ask the main thread for a screenshot NAME
+##   {click:ACTION}        ask the main thread to click the Modern view's button
+##                         with that action ("ui:zoom", "key:R", "pad:R:3")
+##
+## With block_on_shot (main.gd --keys=), the script waits after a {shot:} or
+## {click:} until the main thread has done it (shots_taken); the smoke mode
+## does not block, so its timing stays deterministic.
 ##
 ## on_tick() runs on the program thread as a Machine tick hook.
 class_name KeyScript
@@ -34,6 +40,10 @@ var wait_ticks: int = 0
 var m: Machine = null
 ## names of screenshots requested and not yet taken (main thread drains it)
 var shot_requests: PackedStringArray = PackedStringArray()
+## interactive mode: wait for the main thread after each request (see above)
+var block_on_shot: bool = false
+## requests the main thread has handled (written by the main thread only)
+var shots_taken: int = 0
 ## [action index, tick] of every {when:} / {gone:} that matched
 var when_log: Array = []
 var error: String = ""
@@ -89,7 +99,7 @@ func parse(script: String) -> Array:
 				if k == "wait":
 					out.append(["wait", int(v)])
 					continue
-				if k in ["when", "gone", "shot", "mark"]:
+				if k in ["when", "gone", "shot", "mark", "click"]:
 					out.append([k, v])
 					continue
 			var mods: Array = []
@@ -131,6 +141,8 @@ func done() -> bool:
 
 ## Machine tick hook (program thread).
 func on_tick() -> void:
+	if block_on_shot and shots_taken < shot_requests.size():
+		return
 	while ai < actions.size():
 		var a: Array = actions[ai]
 		var kind: String = a[0]
@@ -157,6 +169,9 @@ func on_tick() -> void:
 			m.kbd_queue.append_array(a[1])
 			ai += 1
 			return
-		if kind == "shot":
-			shot_requests.append(a[1])
+		if kind == "shot" or kind == "click":
+			shot_requests.append(a[1] if kind == "shot" else "click:" + str(a[1]))
+			if block_on_shot:
+				ai += 1
+				return
 		ai += 1

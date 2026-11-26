@@ -97,6 +97,20 @@ var zoom_on: bool = false
 ## Modern view field orientation: "horizontal" (default) or "vertical".
 var field_orientation: String = "horizontal"
 var start_fullscreen: bool = false
+## --keys= / --keys-file=: a key script (host/key_script.gd syntax) that drives
+## the interactive program; {shot:NAME} saves the window to --shot-dir=,
+## {click:ACTION} clicks the Modern view's button with that action.
+var key_text: String = ""
+var keys: KeyScript = null
+var shot_dir: String = "user://shots"
+var quit_when_done: bool = false
+var _shot_frames: int = 0
+var _fps_log: PackedFloat32Array = PackedFloat32Array()
+## --view-trace=<file>: one line per frame during plays (delta, camera, the
+## first three discs on the canvas) to check smoothness.
+var _trace: FileAccess = null
+## numeric-keypad keys currently held that were sent inside Shift
+var _wrapped_keys: Dictionary = {}
 
 
 func _ready() -> void:
@@ -150,6 +164,16 @@ func _parse_args() -> void:
 				view = View.MODERN
 		elif a == "--modern-colors":
 			text_screen.set_modern_colors(true)
+		elif a.begins_with("--keys="):
+			key_text = a.substr(7)
+		elif a.begins_with("--keys-file="):
+			key_text = FileAccess.get_file_as_string(a.substr(12)).strip_edges()
+		elif a.begins_with("--shot-dir="):
+			shot_dir = a.substr(11)
+		elif a.begins_with("--view-trace="):
+			_trace = FileAccess.open(a.substr(13), FileAccess.WRITE)
+		elif a == "--quit-when-done":
+			quit_when_done = true
 		elif a == "--fullscreen":
 			start_fullscreen = true
 
@@ -238,6 +262,16 @@ func _start() -> void:
 		machine = null
 		return
 	machine.log_msg("[load] %s (recompiled), data from %s %s" % [blob.file_name, dos_root, str(info)])
+	keys = null
+	if key_text != "":
+		keys = KeyScript.new(machine, key_text)
+		if keys.error != "":
+			_show_message("Key script: " + keys.error)
+			keys = null
+		else:
+			keys.block_on_shot = true
+			machine.tick_hooks.append(Callable(keys, "on_tick"))
+			DirAccess.make_dir_recursive_absolute(shot_dir)
 	video = Video.new()
 	host = RecompHost.new()
 	# the generated scripts are loaded on the main thread, one per frame
@@ -303,6 +337,7 @@ func _start_smoke() -> void:
 ## Stops the program thread (reset, folder change, quit).
 func _stop() -> void:
 	loader = null
+	keys = null
 	if thread != null:
 		if machine != null:
 			machine.request_abort()
@@ -540,8 +575,10 @@ func _on_modern_key(key_name: String) -> void:
 
 ## A coach's menu key, "pad:<L|R>:<digit>": the left-keypad coach answers
 ## with the function keys (1 = F1 ... 0 = F10), the right-keypad coach with
-## the numeric keypad producing digits (scancode 47h-52h with the ASCII digit,
-## as with NumLock on; Shift gives the same when the program's NumLock is off).
+## the numeric keypad producing digits (scancode 47h-52h with the ASCII
+## digit).  The host BIOS (host/bios.gd) gives keypad digits only with Shift
+## held (it does not apply NumLock to the keypad), so the key is sent inside
+## Shift make/break.
 func _press_coach_key(spec: String) -> void:
 	var parts := spec.split(":")
 	if parts.size() != 3 or parts[2].length() != 1:
@@ -553,19 +590,14 @@ func _press_coach_key(spec: String) -> void:
 		return
 	var pad := [0x52, 0x4F, 0x50, 0x51, 0x4B, 0x4C, 0x4D, 0x47, 0x48, 0x49]
 	var sc: int = pad[d]
-	if (machine.rb(BIOS.BDA_KBFLAGS) & 0x20) != 0:
-		machine.key_scancodes(PackedInt32Array([sc, sc | 0x80]))
-	else:
-		machine.key_scancodes(PackedInt32Array([0x2A, sc, sc | 0x80, 0xAA]))
+	machine.key_scancodes(PackedInt32Array([0x2A, sc, sc | 0x80, 0xAA]))
 
 
-## The right-keypad coach needs keypad digits: keep the program's NumLock in
-## step with the host's when a keypad key is pressed.
-func _sync_numlock(k: InputEventKey) -> void:
-	var host_digits := (k.unicode >= 48 and k.unicode <= 57) or k.unicode == 46
-	var prog_on := (machine.rb(BIOS.BDA_KBFLAGS) & 0x20) != 0
-	if host_digits != prog_on:
-		machine.key_scancodes(PackedInt32Array([0x45, 0xC5]))
+## A real numeric-keypad key: when the host's NumLock makes it a digit, the
+## right-keypad coach needs the program to see a keypad digit, which the host
+## BIOS gives with Shift held (see _press_coach_key).
+static func _keypad_digit(k: InputEventKey) -> bool:
+	return (k.unicode >= 48 and k.unicode <= 57) or k.unicode == 46
 
 
 func _on_modern_ui(action: String) -> void:
@@ -591,6 +623,102 @@ func _on_modern_ui(action: String) -> void:
 			_save_settings()
 
 
+## --keys=: the screenshots and clicks the key script asks for (main thread).
+## A shot waits three frames so the window shows the current state.
+func _run_key_requests(delta: float) -> void:
+	if _fps_log.size() < 100000:
+		_fps_log.append(delta)
+	if keys.shots_taken < keys.shot_requests.size():
+		var req: String = keys.shot_requests[keys.shots_taken]
+		if req.begins_with("click:"):
+			_click_action(req.substr(6))
+			keys.shots_taken += 1
+			return
+		_shot_frames += 1
+		if _shot_frames < 3:
+			return
+		_shot_frames = 0
+		var img := get_viewport().get_texture().get_image()
+		var path := shot_dir.path_join(req + ".png")
+		var err := img.save_png(path)
+		machine.log_msg("[shot] %s (%dx%d, %s, %.0f fps)" % [ProjectSettings.globalize_path(path),
+			img.get_width(), img.get_height(), "ok" if err == OK else "error %d" % err,
+			Engine.get_frames_per_second()])
+		keys.shots_taken += 1
+	elif quit_when_done and keys.done():
+		_print_frame_times()
+		get_tree().quit(0)
+
+
+## Clicks the Modern view's button whose hotspot action is `action`, through
+## the real input path (Input.parse_input_event: motion, press, release).
+func _click_action(action: String) -> void:
+	if action.begins_with("hostkey:KP_"):
+		# a real numeric-keypad key with NumLock on, through _unhandled_input
+		var d := action.substr(11).to_int()
+		for pressed in [true, false]:
+			var ke := InputEventKey.new()
+			ke.keycode = KEY_KP_0 + d
+			ke.physical_keycode = KEY_KP_0 + d
+			ke.unicode = (48 + d) if pressed else 0
+			ke.pressed = pressed
+			Input.parse_input_event(ke)
+		machine.log_msg("[click] %s" % action)
+		return
+	var hs: Array = modern.dl.hotspots
+	for i in range(hs.size() - 1, -1, -1):
+		var h: Array = hs[i]
+		if str(h[4]) != action:
+			continue
+		var pos: Vector2 = modern.global_position + modern.logical_to_window(
+			Vector2(float(h[0]) + float(h[2]) * 0.5, float(h[1]) + float(h[3]) * 0.5))
+		var mv := InputEventMouseMotion.new()
+		mv.position = pos
+		mv.global_position = pos
+		Input.parse_input_event(mv)
+		for pressed in [true, false]:
+			var mb := InputEventMouseButton.new()
+			mb.button_index = MOUSE_BUTTON_LEFT
+			mb.pressed = pressed
+			mb.position = pos
+			mb.global_position = pos
+			Input.parse_input_event(mb)
+		machine.log_msg("[click] %s at %s" % [action, str(pos)])
+		return
+	machine.log_msg("[click] no button %s on the %s screen" % [action, modern.screen_id])
+
+
+func _trace_frame(delta: float) -> void:
+	var mv := modern.screens.match_view
+	if modern.screen_id != "play" or mv.last_discs.size() < 3:
+		return
+	var parts := PackedStringArray(["%.4f" % delta, str(modern.state.play_step),
+		str(modern.ui.get("zoom", false)), str(modern.ui.get("field", ""))])
+	parts.append(str(modern.camera_now()))
+	for i in range(3):
+		var d: Array = mv.last_discs[i]
+		parts.append("%.2f,%.2f" % [float(d[0]), float(d[1])])
+	_trace.store_line(" ".join(parts))
+
+
+func _print_frame_times() -> void:
+	var n := _fps_log.size()
+	if n == 0:
+		return
+	var total := 0.0
+	var worst := 0.0
+	for d in _fps_log:
+		total += d
+		worst = maxf(worst, d)
+	print("[frames] %d frames, mean %.1f ms (%.1f fps), worst %.1f ms" % [n, total / n * 1000.0,
+		n / maxf(total, 0.001), worst * 1000.0])
+	var mf := maxi(modern.perf_frames, 1)
+	print(("[frames] Modern view per frame: refresh %.2f ms, draw %.2f ms; "
+		+ "%d SVG rasterisations, %.1f ms total")
+		% [modern.perf_refresh_usec / 1000.0 / mf, modern.perf_draw_usec / 1000.0 / mf,
+		modern.perf_rasters, modern.perf_raster_usec / 1000.0])
+
+
 func _on_screenshot_pressed() -> void:
 	var shot := get_viewport().get_texture().get_image()
 	if shot == null:
@@ -611,6 +739,8 @@ func _process(delta: float) -> void:
 	_update_toolbar(delta)
 	if machine == null:
 		return
+	if keys != null:
+		_run_key_requests(delta)
 	if loader != null and _load_step():
 		return
 	machine.wake()
@@ -649,6 +779,8 @@ func _update_video(delta: float) -> void:
 			"paused": paused, "sound": sound_on, "subtitle": "", "zoom": zoom_on,
 			"field": field_orientation}
 		modern.refresh(machine, delta)
+		if _trace != null:
+			_trace_frame(delta)
 		aspect.visible = false
 		# unrecognised screens: the HD text renderer inside the modern frame
 		var r := modern.textgrid_rect
@@ -711,14 +843,23 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not scancodes.has(code):
 		return
 	var sc: int = scancodes[code]
-	if k.pressed and code in [KEY_KP_0, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5,
-			KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9, KEY_KP_PERIOD]:
-		_sync_numlock(k)
+	# (the release carries no character: remember which presses were wrapped)
+	var wrap: bool = _wrapped_keys.get(code, false)
+	if k.pressed:
+		wrap = code in [KEY_KP_0, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5,
+			KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9, KEY_KP_PERIOD] and _keypad_digit(k)
+		_wrapped_keys[code] = wrap
+	else:
+		_wrapped_keys.erase(code)
 	var seq := PackedInt32Array()
 	if k.pressed:
+		if wrap:
+			seq.append(0x2A)
 		seq.append(sc)
 	else:
 		seq.append(sc | 0x80)
+		if wrap:
+			seq.append(0xAA)
 	machine.key_scancodes(seq)
 	get_viewport().set_input_as_handled()
 

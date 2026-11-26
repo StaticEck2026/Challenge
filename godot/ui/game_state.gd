@@ -83,6 +83,7 @@ var players: Array = []         # 22 x {fx, fy, team, off, jersey, pos, sx, sy, 
 var ball: Dictionary = {}       # {fx, fy, sx, sy, carrier, placed}
 var play_step: int = 0          # increments whenever any record changes
 var play_los: float = -1.0
+var play_poss: int = 0          # team with the ball when the play started
 var cam_x: int = 0
 var cam_y: int = 0
 var _last_records: PackedInt32Array = PackedInt32Array()
@@ -413,7 +414,13 @@ func _read_play(mem: PackedByteArray) -> void:
 	var los := float(var16(mem, "los"))
 	if not _was_graphics or play_los < 0.0:
 		play_los = los
-	var off_team := var16(mem, "poss")
+	# the team with the ball when the play started: the text scoreboard's
+	# possession from before the play (the game sets 57EC to the play's result
+	# before it shows the play, so after a turnover it already names the other
+	# team), latched for the whole graphics session (play and replay)
+	if not _was_graphics or play_poss < 1:
+		play_poss = poss if sb_valid and (poss == 1 or poss == 2) else var16(mem, "poss")
+	var off_team := play_poss
 	if off_team != 1 and off_team != 2:
 		off_team = poss if poss > 0 else 2
 	var def_team := 3 - off_team

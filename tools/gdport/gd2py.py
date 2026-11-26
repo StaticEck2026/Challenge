@@ -26,7 +26,7 @@ import sys
 
 BUILTIN_METHODS = {
     "begins_with", "ends_with", "to_upper", "to_lower", "length", "substr", "find", "split",
-    "rpad", "unicode_at", "to_ascii_buffer", "strip_edges", "repeat", "get_file", "replace",
+    "rpad", "unicode_at", "to_ascii_buffer", "to_utf8_buffer", "strip_edges", "repeat", "get_file", "replace",
     "join", "hex_decode", "is_empty", "size", "resize", "fill", "append", "append_array",
     "slice", "decode_u16", "decode_u32", "remove_at", "duplicate", "get_string_from_ascii", "hex_encode",
     "pop_back", "sort_custom", "has", "get", "erase", "merge", "keys", "call"}

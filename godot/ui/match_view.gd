@@ -33,6 +33,10 @@ const CAMERA_RATE := 2.5
 ## fraction of a disc radius (the game's positions stay what they are).
 const DECLUTTER_CAP := 0.5
 const DECLUTTER_ITER := 6
+## With ui "dt" (the live view), the declutter offsets ease towards their new
+## values at this rate (1/s), so two discs that cross do not flip sides from
+## one frame to the next.
+const DECLUTTER_RATE := 10.0
 ## Smallest disc radius on the canvas, px.
 const MIN_DISC_PX := 10.5
 
@@ -56,6 +60,7 @@ var last_pinned: Array = []
 ## Chrome drawn over the field in the last frame: [x0, y0, x1, y1] each (tests).
 var occluders: Array = []
 var _zoomed: bool = false
+var _decl_prev: Array = []      # last frame's declutter offsets (live view)
 
 
 func _init(p_art: UiArt = null) -> void:
@@ -281,6 +286,7 @@ func build(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 	if gs.play_active and gs.players.size() == 22:
 		_players(dl, gs, ui)
 	else:
+		_decl_prev = []
 		_ball_marker(dl, gs, ui)
 	toolbar(dl, ui)
 	scoreboard(dl, gs, _zoomed)
@@ -424,6 +430,19 @@ func _players(dl: DrawList, gs: GameState, ui: Dictionary) -> void:
 		else:
 			raw.append([float(p0["fx"]), float(p0["fy"])])
 	var shown := declutter(raw, disc)
+	var dt: float = ui.get("dt", 0.0)
+	if dt > 0.0:
+		var k := 1.0 - exp(-dt * DECLUTTER_RATE)
+		var offs := []
+		for i3 in range(22):
+			var ox: float = shown[i3][0] - raw[i3][0]
+			var oy: float = shown[i3][1] - raw[i3][1]
+			if _decl_prev.size() == 22:
+				ox = lerpf(_decl_prev[i3][0], ox, k)
+				oy = lerpf(_decl_prev[i3][1], oy, k)
+			offs.append([ox, oy])
+			shown[i3] = [raw[i3][0] + ox, raw[i3][1] + oy]
+		_decl_prev = offs
 	last_declutter_yards = 0.0
 	for i2 in range(22):
 		last_declutter_yards = maxf(last_declutter_yards, _dist(raw[i2], shown[i2]))
